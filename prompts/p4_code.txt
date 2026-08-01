@@ -1,0 +1,4 @@
+You are implementing the approved specification.
+Input: SPEC.md
+Task: Generate production-ready FastAPI code in backend/app.py.
+Rules: Use Type-safe Python, standard FastAPI patterns, and Pydantic v2. Use 'uv' for any new dependencies.

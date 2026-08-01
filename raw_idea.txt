@@ -1,0 +1,4 @@
+# My App Idea
+Target: For those who are used to PhraseExpress, a windows text expander app - https://www.phraseexpress.com/features/
+Features: To the extend possible replicate all features and UI/UX of New PhraseExpress. Build complete useable light-weight app
+Tech: provide three best options
