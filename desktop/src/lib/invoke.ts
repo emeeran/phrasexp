@@ -8,6 +8,8 @@ import type {
   ExpandResponse,
   Folder,
   FolderCreate,
+  LibraryExport,
+  OutputMode,
   Phrase,
   PhraseCreate,
   PhraseSummary,
@@ -58,8 +60,13 @@ export const api = {
   },
 
   // M3: type a phrase's expansion into the focused app via the Injector.
-  injectPhrase: (phraseId: string, inputs?: Record<string, string>) =>
-    call<string>("inject_phrase", { phraseId, inputs: inputs ?? null }),
+  injectPhrase: (phraseId: string, inputs?: Record<string, string>, mode: OutputMode = "type") =>
+    call<string>("inject_phrase", { phraseId, inputs: inputs ?? null, mode }),
+
+  // Library import/export.
+  exportLibrary: () => call<LibraryExport>("export_library"),
+  importCsv: (csvText: string, folderId?: string | null) =>
+    call<number>("import_csv", { csvText, folderId: folderId ?? null }),
 
   // M4: silent autotext listener status + toggle.
   autotextStatus: () => call<AutotextStatus>("autotext_status"),

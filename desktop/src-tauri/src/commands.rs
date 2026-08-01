@@ -167,6 +167,7 @@ pub fn expand_phrase(
 pub fn inject_phrase(
     phrase_id: String,
     inputs: Option<std::collections::HashMap<String, String>>,
+    mode: Option<OutputMode>,
     state: State<'_, AppState>,
 ) -> Result<String, ApiError> {
     let phrase = state
@@ -176,13 +177,21 @@ pub fn inject_phrase(
     if phrase.deleted_at.is_some() {
         return Err(not_found(format!("phrase {phrase_id} not found")));
     }
-    let req = ExpandRequest {
-        trigger: None,
-        inputs: inputs.unwrap_or_default(),
-    };
-    let output = state.db.expand(&phrase, &req.inputs)?;
-    state.injector.type_text(&output)?;
+    let inputs = inputs.unwrap_or_default();
+    let output = state.db.expand(&phrase, &inputs)?;
+    match mode.unwrap_or_default() {
+        OutputMode::Copy => copy_to_clipboard(&output)?,
+        OutputMode::Type => state.injector.type_text(&output)?,
+    }
     Ok(output)
+}
+
+/// Copy text to the system clipboard (best-effort).
+fn copy_to_clipboard(text: &str) -> Result<(), ApiError> {
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set_text(text))
+        .map_err(|e| ApiError::from(DomainError::Validation(format!("clipboard set: {e}"))))?;
+    Ok(())
 }
 
 // -- Clipboard (FR-9) ------------------------------------------------------ //
@@ -206,6 +215,85 @@ pub fn add_clipboard(
     };
     state.db.add_clipboard(&entry)?;
     Ok(entry)
+}
+
+// -- Library import/export ------------------------------------------------- //
+/// Export the whole library (folders + active phrases) as JSON.
+#[tauri::command]
+pub fn export_library(state: State<'_, AppState>) -> Result<serde_json::Value, ApiError> {
+    let folders = state.db.list_folders()?;
+    let phrases = state.db.list_phrases(None, None, false)?;
+    Ok(serde_json::json!({ "folders": folders, "phrases": phrases }))
+}
+
+/// Import phrases from CSV: one per line, `abbreviation,text` (text may contain commas).
+/// Existing abbreviations are skipped. Returns the number imported.
+#[tauri::command]
+pub fn import_csv(
+    csv_text: String,
+    folder_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<u32, ApiError> {
+    let folder_id = match folder_id {
+        Some(f) => f,
+        None => {
+            let f = Folder {
+                id: Uuid::new_v4().to_string(),
+                name: "Imported".into(),
+                parent_id: None,
+                created_at: now_iso(),
+            };
+            state.db.create_folder(&f)?.id
+        }
+    };
+
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .from_reader(csv_text.as_bytes());
+    let mut count = 0u32;
+    for result in rdr.records() {
+        let Ok(record) = result else { continue };
+        if record.len() < 2 {
+            continue;
+        }
+        let abbr = record.get(0).unwrap_or("").trim().to_string();
+        let text = record.get(1).unwrap_or("").to_string();
+        if abbr.is_empty() && text.is_empty() {
+            continue;
+        }
+        let triggers = if abbr.is_empty() {
+            Vec::new()
+        } else {
+            vec![TriggerBinding {
+                kind: TriggerType::Autotext,
+                abbreviation: Some(abbr.clone()),
+                key: None,
+            }]
+        };
+        let name: String = if text.is_empty() {
+            abbr.clone()
+        } else {
+            text.chars().take(80).collect()
+        };
+        let phrase = Phrase {
+            id: Uuid::new_v4().to_string(),
+            folder_id: folder_id.clone(),
+            name,
+            abbreviation: if abbr.is_empty() { None } else { Some(abbr) },
+            content_type: ContentType::Plain,
+            body: vec![Segment::Text { text }],
+            triggers,
+            sensitive: false,
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            deleted_at: None,
+        };
+        if state.db.create_phrase(&phrase).is_ok() {
+            count += 1;
+        }
+    }
+    let _ = crate::triggers::rebuild_index(&state.db, &state.abbrev_index);
+    Ok(count)
 }
 
 // -- Autotext (M4) --------------------------------------------------------- //

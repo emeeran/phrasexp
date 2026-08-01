@@ -168,6 +168,50 @@
       banner = errMsg(e);
     }
   }
+
+  let csvInput: HTMLInputElement | undefined = $state();
+
+  async function copyPhrase(p: PhraseSummary) {
+    try {
+      await api.injectPhrase(p.id, {}, "copy");
+      banner = `Copied “${p.name}” to clipboard`;
+    } catch (e) {
+      banner = errMsg(e);
+    }
+  }
+
+  async function exportLib() {
+    try {
+      const data = await api.exportLibrary();
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "phrasexp-library.json";
+      a.click();
+      URL.revokeObjectURL(url);
+      banner = "Library exported to phrasexp-library.json";
+    } catch (e) {
+      banner = errMsg(e);
+    }
+  }
+
+  async function onCsvPicked(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    try {
+      const n = await api.importCsv(text, selectedFolderId);
+      banner = `Imported ${n} phrase${n === 1 ? "" : "s"}`;
+      await Promise.all([refreshFolders(), refreshPhrases()]);
+    } catch (err) {
+      banner = errMsg(err);
+    }
+    input.value = "";
+  }
 </script>
 
 {#if isPopup}
@@ -188,6 +232,9 @@
           autotext {autotext.enabled ? (autotext.running ? "live" : "blocked") : "off"} · {autotext.events_seen} evts
         </span>
       {/if}
+      <button class="ghost tiny" onclick={exportLib} title="Export library as JSON">⭳ Export</button>
+      <button class="ghost tiny" onclick={() => csvInput?.click()} title="Import phrases from CSV: abbreviation,text">⭱ Import</button>
+      <input bind:this={csvInput} type="file" accept=".csv,text/csv" style="display:none" onchange={onCsvPicked} />
       <button class="ghost tiny" title="Settings" onclick={() => (showSettings = true)}>⚙</button>
     </div>
   </div>
@@ -265,6 +312,7 @@
         </div>
         <div class="preview muted">{p.content_preview}</div>
         <div class="row" style="justify-content:flex-end; margin-top:6px">
+          <button class="tiny ghost" onclick={(e) => { e.stopPropagation(); copyPhrase(p); }}>Copy</button>
           <button class="tiny danger ghost" onclick={(e) => { e.stopPropagation(); removePhrase(p); }}>Delete</button>
         </div>
       </div>

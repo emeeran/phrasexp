@@ -36,6 +36,15 @@ pub enum SortKey {
     Created,
 }
 
+/// How an expansion is delivered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputMode {
+    #[default]
+    Type,
+    Copy,
+}
+
 // --------------------------------------------------------------------------- //
 // Macros — internally tagged on "type" (FR-5)
 // --------------------------------------------------------------------------- //

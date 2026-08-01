@@ -39,6 +39,14 @@ export type Macro =
 
 export type SortKey = "name" | "updated" | "created";
 
+export type OutputMode = "type" | "copy";
+
+/** Shape returned by export_library. */
+export interface LibraryExport {
+  folders: Folder[];
+  phrases: Phrase[];
+}
+
 export interface TextSegment {
   type: "text";
   text: string;
