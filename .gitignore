@@ -8,10 +8,3 @@ wheels/
 
 # Virtual environments
 .venv
-
-# Rust / Tauri build artifacts
-target/
-
-# Local databases
-*.db
-*.db-journal
