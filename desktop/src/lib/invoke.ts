@@ -13,6 +13,7 @@ import type {
   PhraseSummary,
   PhraseUpdate,
   Settings,
+  SortKey,
   TriggerType,
 } from "./types";
 
@@ -27,11 +28,17 @@ export const api = {
   deleteFolder: (folderId: string) => call<void>("delete_folder", { folderId }),
 
   // Phrases (FR-1,6,7,8)
-  listPhrases: (folderId?: string | null, q?: string, includeDeleted = false) =>
+  listPhrases: (
+    folderId?: string | null,
+    q?: string,
+    includeDeleted = false,
+    sort: SortKey = "name",
+  ) =>
     call<PhraseSummary[]>("list_phrases", {
       folderId: folderId ?? null,
       q: q ?? null,
       includeDeleted,
+      sort,
     }),
   getPhrase: (phraseId: string) => call<Phrase>("get_phrase", { phraseId }),
   createPhrase: (payload: PhraseCreate) => call<Phrase>("create_phrase", { payload }),

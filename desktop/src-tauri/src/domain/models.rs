@@ -26,6 +26,16 @@ pub enum TriggerType {
     Hotkey,
 }
 
+/// Sort order for the phrase list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SortKey {
+    #[default]
+    Name,
+    Updated,
+    Created,
+}
+
 // --------------------------------------------------------------------------- //
 // Macros — internally tagged on "type" (FR-5)
 // --------------------------------------------------------------------------- //
@@ -52,6 +62,23 @@ pub enum Macro {
     InputForm {
         field: String,
     },
+    /// Uniform random integer in [min, max].
+    Random {
+        #[serde(default)]
+        min: i64,
+        #[serde(default = "max_default")]
+        max: i64,
+    },
+    /// Arithmetic expression, e.g. "2+3*4" or "round(100/3)".
+    Math {
+        expr: String,
+    },
+    /// Insert the latest clipboard text.
+    Clipboard,
+}
+
+fn max_default() -> i64 {
+    100
 }
 
 // --------------------------------------------------------------------------- //

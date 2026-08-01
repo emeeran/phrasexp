@@ -17,7 +17,27 @@ export interface InputFormMacro {
   type: "inputform";
   field: string;
 }
-export type Macro = DateTimeMacro | DateMathMacro | InputFormMacro;
+export interface RandomMacro {
+  type: "random";
+  min?: number;
+  max?: number;
+}
+export interface MathMacro {
+  type: "math";
+  expr: string;
+}
+export interface ClipboardMacro {
+  type: "clipboard";
+}
+export type Macro =
+  | DateTimeMacro
+  | DateMathMacro
+  | InputFormMacro
+  | RandomMacro
+  | MathMacro
+  | ClipboardMacro;
+
+export type SortKey = "name" | "updated" | "created";
 
 export interface TextSegment {
   type: "text";

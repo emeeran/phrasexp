@@ -40,7 +40,13 @@
         ? { type, field: "name" }
         : type === "datemath"
           ? { type, days_offset: 0, format: "%Y-%m-%d" }
-          : { type, format: "%Y-%m-%d %H:%M" };
+          : type === "datetime"
+            ? { type, format: "%Y-%m-%d %H:%M" }
+            : type === "random"
+              ? { type, min: 1, max: 100 }
+              : type === "math"
+                ? { type, expr: "2+2" }
+                : { type: "clipboard" };
     segments.push({ type: "macro", macro });
   }
   function removeAt(i: number) {
@@ -126,6 +132,9 @@
         <button class="tiny" onclick={() => addMacro("datetime")}>+ datetime</button>
         <button class="tiny" onclick={() => addMacro("datemath")}>+ datemath</button>
         <button class="tiny" onclick={() => addMacro("inputform")}>+ input</button>
+        <button class="tiny" onclick={() => addMacro("random")}>+ random</button>
+        <button class="tiny" onclick={() => addMacro("math")}>+ math</button>
+        <button class="tiny" onclick={() => addMacro("clipboard")}>+ clipboard</button>
       </div>
     </div>
     {#each segments as seg, i (i)}
@@ -160,6 +169,26 @@
           <div class="field">
             <span class="caption">field name (matched against expand inputs)</span>
             <input bind:value={seg.macro.field} />
+          </div>
+        {:else if seg.macro.type === "random"}
+          <div class="row" style="gap:10px">
+            <div class="field" style="flex:0 0 110px">
+              <span class="caption">min</span>
+              <input type="number" bind:value={seg.macro.min} />
+            </div>
+            <div class="field" style="flex:0 0 110px">
+              <span class="caption">max</span>
+              <input type="number" bind:value={seg.macro.max} />
+            </div>
+          </div>
+        {:else if seg.macro.type === "math"}
+          <div class="field">
+            <span class="caption">expression (e.g. 100*1.2, round(10/3))</span>
+            <input bind:value={seg.macro.expr} spellcheck="false" />
+          </div>
+        {:else if seg.macro.type === "clipboard"}
+          <div class="field">
+            <span class="caption">Inserts the current clipboard text when expanded.</span>
           </div>
         {/if}
       </div>

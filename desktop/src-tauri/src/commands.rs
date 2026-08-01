@@ -7,7 +7,6 @@ use std::sync::atomic::Ordering;
 use tauri::State;
 use uuid::Uuid;
 
-use crate::db;
 use crate::domain::models::*;
 use crate::domain::{ApiError, DomainError, DomainResult};
 use crate::AppState;
@@ -60,12 +59,18 @@ pub fn list_phrases(
     folder_id: Option<String>,
     q: Option<String>,
     include_deleted: Option<bool>,
+    sort: Option<SortKey>,
     state: State<'_, AppState>,
 ) -> Result<Vec<PhraseSummary>, ApiError> {
-    let phrases =
+    let mut phrases =
         state
             .db
             .list_phrases(folder_id.as_deref(), q.as_deref(), include_deleted.unwrap_or(false))?;
+    match sort.unwrap_or_default() {
+        SortKey::Name => phrases.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+        SortKey::Updated => phrases.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
+        SortKey::Created => phrases.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
+    }
     Ok(phrases.iter().map(|p| state.db.summary(p)).collect())
 }
 
@@ -147,7 +152,7 @@ pub fn expand_phrase(
         .db
         .resolve(&trigger)?
         .ok_or_else(|| ApiError::from(DomainError::NotFound("no phrase matches the given trigger".into())))?;
-    let output = db::expand(&phrase, &req)?;
+    let output = state.db.expand(&phrase, &req.inputs)?;
     Ok(ExpandResponse {
         phrase_id: phrase.id,
         abbreviation: phrase.abbreviation,
@@ -175,7 +180,7 @@ pub fn inject_phrase(
         trigger: None,
         inputs: inputs.unwrap_or_default(),
     };
-    let output = db::expand(&phrase, &req)?;
+    let output = state.db.expand(&phrase, &req.inputs)?;
     state.injector.type_text(&output)?;
     Ok(output)
 }

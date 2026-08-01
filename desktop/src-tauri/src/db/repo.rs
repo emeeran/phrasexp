@@ -5,9 +5,11 @@ use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use std::collections::HashMap;
+
 use crate::domain::error::{DomainError, DomainResult};
 use crate::domain::models::{
-    ClipboardEntry, ContentType, ExpandRequest, Folder, Phrase, PhraseSummary, Segment, Settings,
+    ClipboardEntry, ContentType, Folder, Phrase, PhraseSummary, Segment, Settings,
     TriggerBinding, TriggerRequest, TriggerType,
 };
 use crate::domain::{expand_phrase, literal_preview};
@@ -22,6 +24,14 @@ fn now_iso() -> String {
 
 fn db_err(e: rusqlite::Error) -> DomainError {
     DomainError::Validation(format!("database error: {e}"))
+}
+
+/// Best-effort read of the current clipboard text (for the Clipboard macro).
+fn read_clipboard_text() -> Option<String> {
+    arboard::Clipboard::new()
+        .ok()
+        .and_then(|mut c| c.get_text().ok())
+        .filter(|s| !s.is_empty())
 }
 
 fn content_type_str(c: ContentType) -> &'static str {
@@ -438,6 +448,19 @@ impl Db {
     }
 
     // ----------------------------------------------------------------------- //
+    // Expansion (Clipboard macro needs the system clipboard)
+    // ----------------------------------------------------------------------- //
+    pub fn expand(
+        &self,
+        phrase: &Phrase,
+        inputs: &HashMap<String, String>,
+    ) -> DomainResult<String> {
+        let now = chrono::Utc::now();
+        let clip = read_clipboard_text();
+        expand_phrase(phrase, inputs, now, clip.as_deref())
+    }
+
+    // ----------------------------------------------------------------------- //
     // Settings (M5)
     // ----------------------------------------------------------------------- //
     pub fn load_settings(&self) -> DomainResult<Settings> {
@@ -498,11 +521,6 @@ impl Db {
         .map_err(db_err)?;
         Ok(s.clone())
     }
-}
-
-/// Expand a resolved phrase (used by commands/triggers).
-pub fn expand(phrase: &Phrase, req: &ExpandRequest) -> DomainResult<String> {
-    expand_phrase(phrase, &req.inputs, chrono::Utc::now())
 }
 
 fn row_to_folder(r: &rusqlite::Row) -> rusqlite::Result<Folder> {
@@ -726,11 +744,7 @@ mod tests {
         let phrase = db.resolve(&trig).unwrap().unwrap();
         let mut inputs = HashMap::new();
         inputs.insert("n".into(), "Sam".into());
-        let req = ExpandRequest {
-            trigger: None,
-            inputs,
-        };
-        assert_eq!(expand(&phrase, &req).unwrap(), "Hello Sam");
+        assert_eq!(db.expand(&phrase, &inputs).unwrap(), "Hello Sam");
     }
 
     #[test]

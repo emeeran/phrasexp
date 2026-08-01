@@ -4,8 +4,16 @@
   import PhraseEditor from "$lib/components/PhraseEditor.svelte";
   import Popup from "$lib/components/Popup.svelte";
   import SettingsPanel from "$lib/components/Settings.svelte";
+  import QuickAdd from "$lib/components/QuickAdd.svelte";
   import { api, errMsg } from "$lib/invoke";
-  import type { AutotextStatus, ClipboardEntry, Folder, Phrase, PhraseSummary } from "$lib/types";
+  import type {
+    AutotextStatus,
+    ClipboardEntry,
+    Folder,
+    Phrase,
+    PhraseSummary,
+    SortKey,
+  } from "$lib/types";
 
   // The popup window shares this SPA entry; branch on its label.
   const isPopup = getCurrentWindow().label === "popup";
@@ -18,6 +26,7 @@
   // filters / selection
   let selectedFolderId = $state<string | null>(null);
   let query = $state("");
+  let sort = $state<SortKey>("name");
 
   // editor
   let editing = $state<{ phrase: Phrase | null; folderId: string } | null>(null);
@@ -38,7 +47,7 @@
     folders = await api.listFolders();
   }
   async function refreshPhrases() {
-    phrases = await api.listPhrases(selectedFolderId, query.trim() || undefined);
+    phrases = await api.listPhrases(selectedFolderId, query.trim() || undefined, false, sort);
   }
   async function refreshClipboard() {
     clipboard = await api.listClipboard();
@@ -52,10 +61,11 @@
     }
   });
 
-  // reload phrases whenever the folder filter or search changes
+  // reload phrases whenever the folder filter, search, or sort changes
   $effect(() => {
     void selectedFolderId;
     void query;
+    void sort;
     refreshPhrases().catch((e) => (banner = errMsg(e)));
   });
 
@@ -225,8 +235,22 @@
 
   <!-- Center: phrase list -->
   <section class="pane scroll">
+    <QuickAdd
+      folders={folders}
+      selectedFolderId={selectedFolderId}
+      onadded={() => {
+        refreshFolders();
+        refreshPhrases();
+      }}
+    />
+    <div class="divider" style="margin:12px 0"></div>
     <div class="row between" style="margin-bottom:10px">
       <input bind:value={query} placeholder="Search phrases…" style="flex:1" />
+      <select bind:value={sort} style="flex:0 0 110px" aria-label="Sort phrases">
+        <option value="name">Name</option>
+        <option value="updated">Recently edited</option>
+        <option value="created">Newest first</option>
+      </select>
       <button class="primary" onclick={newPhrase}>+ New phrase</button>
     </div>
     {#each phrases as p (p.id)}

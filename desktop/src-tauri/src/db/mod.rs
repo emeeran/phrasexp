@@ -2,4 +2,4 @@
 
 pub mod repo;
 
-pub use repo::{expand, Db};
+pub use repo::Db;

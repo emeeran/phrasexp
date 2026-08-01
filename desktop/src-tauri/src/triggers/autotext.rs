@@ -19,8 +19,9 @@ use std::sync::{Arc, Mutex};
 use rdev::{listen, Event, EventType, Key};
 
 use crate::db::Db;
+use crate::domain::case_adapt;
 use crate::domain::models::{Macro, Phrase, Segment};
-use crate::domain::{expand_phrase, DomainResult};
+use crate::domain::DomainResult;
 use crate::triggers::Injector;
 
 const MAX_BUFFER: usize = 64;
@@ -252,9 +253,10 @@ fn maybe_expand(
     if phrase.deleted_at.is_some() || has_inputform(&phrase) {
         return; // inputform phrases need the popup; skip silent expansion.
     }
-    let Ok(output) = expand_phrase(&phrase, &HashMap::new(), chrono::Utc::now()) else {
+    let Ok(output) = db.expand(&phrase, &HashMap::new()) else {
         return;
     };
+    let output = case_adapt(&output, &abbr);
 
     // Erase the typed abbreviation, then type the expansion. Guard against re-entry.
     inj_flag.store(true, Ordering::Relaxed);
