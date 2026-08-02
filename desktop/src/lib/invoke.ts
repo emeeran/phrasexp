@@ -92,6 +92,8 @@ export const api = {
   addClipboard: (text: string) =>
     call<ClipboardEntry>("add_clipboard", { payload: { text } }),
   clearClipboard: () => call<void>("clear_clipboard"),
+  resetDatabase: () => call<void>("reset_database"),
+  folderCounts: () => call<[string, number][]>("folder_counts"),
 };
 
 export function errMsg(e: unknown): string {

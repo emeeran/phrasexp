@@ -457,6 +457,29 @@ impl Db {
         Ok(())
     }
 
+    /// Reset: delete all user data (phrases, folders, clipboard, versions). Keeps settings.
+    pub fn reset_database(&self) -> DomainResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(
+            "DELETE FROM phrase_versions; \
+             DELETE FROM clipboard_entries; \
+             DELETE FROM phrases; \
+             DELETE FROM folders;",
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Phrase count per folder_id.
+    pub fn folder_counts(&self) -> DomainResult<Vec<(String, u32)>> {
+        let phrases = self.list_phrases(None, None, false)?;
+        let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        for p in &phrases {
+            *counts.entry(p.folder_id.clone()).or_default() += 1;
+        }
+        Ok(counts.into_iter().collect())
+    }
+
     /// Build a masked summary for list views (FR-8).
     pub fn summary(&self, phrase: &Phrase) -> PhraseSummary {
         let preview = if phrase.sensitive {

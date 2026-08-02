@@ -345,6 +345,8 @@ pub fn run() {
             commands::list_clipboard,
             commands::add_clipboard,
             commands::clear_clipboard,
+            commands::reset_database,
+            commands::folder_counts,
             commands::export_library,
             commands::import_csv,
             commands::import_ahk,

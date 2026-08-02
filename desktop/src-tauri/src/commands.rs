@@ -235,6 +235,19 @@ pub fn clear_clipboard(state: State<'_, AppState>) -> Result<(), ApiError> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn reset_database(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<(), ApiError> {
+    state.db.reset_database()?;
+    let _ = crate::triggers::rebuild_index(&state.db, &state.abbrev_index);
+    crate::reregister_hotkeys(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn folder_counts(state: State<'_, AppState>) -> Result<Vec<(String, u32)>, ApiError> {
+    Ok(state.db.folder_counts()?)
+}
+
 // -- Library import/export ------------------------------------------------- //
 /// Export the whole library (folders + active phrases) as JSON.
 #[tauri::command]

@@ -39,6 +39,7 @@
   let historyPhrase = $state<PhraseSummary | null>(null);
   let versions = $state<PhraseVersion[]>([]);
   let theme = $state(getTheme());
+  let folderCounts = $state<Map<string, number>>(new Map());
 
   // expander
   let expanderType = $state<"autotext" | "hotkey">("autotext");
@@ -53,6 +54,8 @@
 
   async function refreshFolders() {
     folders = await api.listFolders();
+    const counts = await api.folderCounts();
+    folderCounts = new Map(counts.map(([id, n]) => [id, n] as [string, number]));
   }
   async function refreshPhrases() {
     phrases = await api.listPhrases(selectedFolderId, query.trim() || undefined, false, sort);
@@ -296,11 +299,6 @@
           autotext {autotext.enabled ? (autotext.running ? "live" : "blocked") : "off"} · {autotext.events_seen} evts
         </span>
       {/if}
-      <button class="ghost tiny" onclick={exportLib} title="Export library as JSON">⭳ Export</button>
-      <button class="ghost tiny" onclick={() => csvInput?.click()} title="Import phrases from CSV: abbreviation,text">⭱ CSV</button>
-      <input bind:this={csvInput} type="file" accept=".csv,text/csv" style="display:none" onchange={onCsvPicked} />
-      <button class="ghost tiny" onclick={() => ahkInput?.click()} title="Import AutoHotKey hotstrings (::trigger::replacement)">⭱ AHK</button>
-      <input bind:this={ahkInput} type="file" accept=".ahk,.txt,text/plain" style="display:none" onchange={onAhkPicked} />
       <button class="ghost tiny" onclick={loadDupes} title="Find duplicate phrases">⧉ Dupes</button>
       <button class="ghost tiny" title="Toggle light/dark theme" onclick={() => (theme = toggleTheme())}>
         {theme === "dark" ? "☀" : "☾"}
@@ -322,7 +320,7 @@
       {#each folders as f (f.id)}
         <div class="row between row-btn" class:on={selectedFolderId === f.id}>
           <button class="ghost" style="flex:1; text-align:left; justify-content:flex-start" onclick={() => selectFolder(f.id)}>
-            📁 {f.name}
+            📁 {f.name} <span class="faint">({folderCounts.get(f.id) ?? 0})</span>
           </button>
           <button class="tiny danger ghost" onclick={() => removeFolder(f)}>✕</button>
         </div>
@@ -608,6 +606,8 @@
     padding: 16px 20px;
     width: 520px;
     max-width: 90vw;
+    max-height: 85vh;
+    overflow-y: auto;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
   }
   .dup-group {

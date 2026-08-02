@@ -7,6 +7,8 @@
   let saving = $state(false);
   let error = $state<string | null>(null);
   let savedFlash = $state(false);
+  let csvInput: HTMLInputElement | undefined = $state();
+  let ahkInput: HTMLInputElement | undefined = $state();
 
   onMount(async () => {
     try {
@@ -29,6 +31,49 @@
     } finally {
       saving = false;
     }
+  }
+
+  async function exportLib() {
+    try {
+      const data = await api.exportLibrary();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "phrasexp-library.json";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { error = errMsg(e); }
+  }
+
+  async function onCsvPicked(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const n = await api.importCsv(await file.text(), null);
+      error = `Imported ${n} phrases from CSV`;
+    } catch (err) { error = errMsg(err); }
+    input.value = "";
+  }
+
+  async function onAhkPicked(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const n = await api.importAhk(await file.text(), null);
+      error = `Imported ${n} phrases from AHK`;
+    } catch (err) { error = errMsg(err); }
+    input.value = "";
+  }
+
+  async function doReset() {
+    if (!confirm("Delete ALL phrases, folders, clipboard, and version history? This cannot be undone.")) return;
+    try {
+      await api.resetDatabase();
+      error = "Database reset — restart PhraseXp.";
+    } catch (e) { error = errMsg(e); }
   }
 </script>
 
@@ -60,14 +105,14 @@
     <div class="field">
       <label for="hk">Popup hotkey</label>
       <input id="hk" bind:value={s.popup_hotkey} placeholder="Control+Alt+Space" />
-      <span class="faint">e.g. Control+Alt+Space, Shift+Alt+P, Meta+Space · keys: a–z, 0–9, Space, F1–F12</span>
     </div>
 
-    <div class="divider" style="margin:10px 0; height:1px; background:var(--border-soft)"></div>
+    <div class="divider"></div>
 
+    <strong>AI Integration</strong>
     <label class="toggle">
       <input type="checkbox" bind:checked={s.ai_enabled} />
-      <span>Enable AI macros <span class="faint">— OpenAI-compatible · bring your own key</span></span>
+      <span>Enable AI macros <span class="faint">— OpenAI-compatible · BYO key</span></span>
     </label>
     {#if s.ai_enabled}
       <div class="field">
@@ -75,7 +120,7 @@
         <input id="ai-url" bind:value={s.ai_base_url} placeholder="https://api.openai.com/v1" />
       </div>
       <div class="field">
-        <label for="ai-key">API key <span class="faint">(stored locally in your phrase DB)</span></label>
+        <label for="ai-key">API key</label>
         <input id="ai-key" type="password" bind:value={s.ai_api_key} placeholder="sk-..." />
       </div>
       <div class="field">
@@ -83,6 +128,18 @@
         <input id="ai-model" bind:value={s.ai_model} placeholder="gpt-4o-mini" />
       </div>
     {/if}
+
+    <div class="divider"></div>
+
+    <strong>Data</strong>
+    <div class="row" style="flex-wrap:wrap; gap:6px">
+      <button class="tiny" onclick={exportLib}>⭳ Export JSON</button>
+      <button class="tiny" onclick={() => csvInput?.click()}>⭱ Import CSV</button>
+      <button class="tiny" onclick={() => ahkInput?.click()}>⭱ Import AHK</button>
+      <button class="tiny danger" onclick={doReset}>🗑 Reset Database</button>
+    </div>
+    <input bind:this={csvInput} type="file" accept=".csv,text/csv" style="display:none" onchange={onCsvPicked} />
+    <input bind:this={ahkInput} type="file" accept=".ahk,.txt" style="display:none" onchange={onAhkPicked} />
 
     {#if error}<div class="error">{error}</div>{/if}
     <div class="row">
@@ -104,5 +161,10 @@
   .toggle input {
     width: auto;
     margin-top: 3px;
+  }
+  .divider {
+    height: 1px;
+    background: var(--border-soft);
+    margin: 6px 0;
   }
 </style>
