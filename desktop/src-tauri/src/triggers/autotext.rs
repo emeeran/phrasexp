@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rdev::{listen, Event, EventType, Key};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 use crate::db::Db;
 use crate::domain::case_adapt;
@@ -247,6 +247,17 @@ fn has_inputform(p: &Phrase) -> bool {
     })
 }
 
+/// Does the phrase contain an AI macro (which needs a blocking network call)?
+fn has_ai(p: &Phrase) -> bool {
+    p.body.iter().any(|s| {
+        matches!(
+            s,
+            Segment::Macro { macro_value }
+                if matches!(macro_value, Macro::Ai { .. })
+        )
+    })
+}
+
 /// US-layout mapping of a physical key (+ shift state) to the typed character, if printable.
 /// Unknown/unmapped keys return None (the caller treats that as "reset the buffer").
 pub fn key_to_char(key: Key, shifted: bool) -> Option<char> {
@@ -429,12 +440,51 @@ fn maybe_expand(
             return; // wrong application focused
         }
     }
+
+    // AI macros make blocking network calls (1-3s). Erase the abbreviation now
+    // and expand + inject in a background thread so the listener isn't blocked.
+    if has_ai(&phrase) {
+        inj_flag.store(true, Ordering::Relaxed);
+        let _ = inj.backspace(abbr.chars().count());
+        inj_flag.store(false, Ordering::Relaxed);
+        buffer.clear();
+
+        let state = app.state::<crate::AppState>();
+        let db_arc = state.db.clone();
+        let inj_arc = state.injector.clone();
+        let phrase_owned = phrase.clone();
+        let app_clone = app.clone();
+        let case_adapt_on = case_adapt_flag.load(Ordering::Relaxed);
+        let abbr_owned = abbr.clone();
+        std::thread::spawn(move || {
+            match db_arc.expand(&phrase_owned, &HashMap::new()) {
+                Ok(output) => {
+                    let output = if case_adapt_on {
+                        crate::domain::case_adapt(&output, &abbr_owned)
+                    } else {
+                        output
+                    };
+                    let _ = crate::triggers::inject::deliver(
+                        &*inj_arc,
+                        phrase_owned.content_type,
+                        &output,
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[phrasexp] AI expansion error: {e}");
+                    let _ = app_clone.emit("phrase-error", format!("{e}"));
+                }
+            }
+        });
+        return;
+    }
+
+    // Non-AI: expand synchronously (fast — pure computation, no network).
     let output = match db.expand(&phrase, &HashMap::new()) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("[phrasexp] expansion error: {e}");
             let _ = app.emit("phrase-error", format!("{e}"));
-            // Erase the abbreviation so the user isn't left with it
             inj_flag.store(true, Ordering::Relaxed);
             let _ = inj.backspace(abbr.chars().count());
             inj_flag.store(false, Ordering::Relaxed);
