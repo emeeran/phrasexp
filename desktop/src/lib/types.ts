@@ -36,6 +36,18 @@ export interface NestedMacro {
   type: "nested";
   phrase_id: string;
 }
+export interface EnvMacro {
+  type: "env";
+  var: string;
+}
+export interface PickMacro {
+  type: "pick";
+  options: string[];
+}
+export interface FileMacro {
+  type: "file";
+  path: string;
+}
 export type Macro =
   | DateTimeMacro
   | DateMathMacro
@@ -43,7 +55,10 @@ export type Macro =
   | RandomMacro
   | MathMacro
   | ClipboardMacro
-  | NestedMacro;
+  | NestedMacro
+  | EnvMacro
+  | PickMacro
+  | FileMacro;
 
 export type SortKey = "name" | "updated" | "created";
 

@@ -55,7 +55,13 @@
                 ? { type, expr: "2+2" }
                 : type === "nested"
                   ? { type, phrase_id: linkable[0]?.id ?? "" }
-                  : { type: "clipboard" };
+                  : type === "env"
+                    ? { type, var: "HOME" }
+                    : type === "pick"
+                      ? { type, options: ["yes", "no"] }
+                      : type === "file"
+                        ? { type, path: "" }
+                        : { type: "clipboard" };
     segments.push({ type: "macro", macro });
   }
   function removeAt(i: number) {
@@ -159,6 +165,9 @@
         <button class="tiny" onclick={() => addMacro("nested")} disabled={linkable.length === 0}>
           + nested
         </button>
+        <button class="tiny" onclick={() => addMacro("env")}>+ env</button>
+        <button class="tiny" onclick={() => addMacro("pick")}>+ pick</button>
+        <button class="tiny" onclick={() => addMacro("file")}>+ file</button>
       </div>
     </div>
     {#each segments as seg, i (i)}
@@ -248,6 +257,29 @@
                 <option value={pp.id}>{pp.name}</option>
               {/each}
             </select>
+          </div>
+        {:else if seg.macro.type === "env"}
+          <div class="field">
+            <span class="caption">environment variable name</span>
+            <input bind:value={seg.macro.var} placeholder="HOME, USER, …" spellcheck="false" />
+          </div>
+        {:else if seg.macro.type === "pick"}
+          <div class="field">
+            <span class="caption">options (comma-separated — one is chosen at random)</span>
+            <input
+              value={seg.macro.options.join(", ")}
+              oninput={(e) =>
+                (seg.macro.options = e.currentTarget.value
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean))}
+              placeholder="yes, no, maybe"
+            />
+          </div>
+        {:else if seg.macro.type === "file"}
+          <div class="field">
+            <span class="caption">file path (contents are inserted)</span>
+            <input bind:value={seg.macro.path} placeholder="/path/to/file.txt" spellcheck="false" />
           </div>
         {/if}
       </div>

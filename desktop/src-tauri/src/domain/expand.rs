@@ -37,6 +37,16 @@ pub fn evaluate_macro(
                 .map_err(|e| DomainError::Validation(format!("math expression: {e}")))?;
             Ok(format_number(val))
         }
+        Macro::Env { var } => Ok(std::env::var(var).unwrap_or_default()),
+        Macro::Pick { options } => {
+            use rand::seq::SliceRandom;
+            Ok(options
+                .choose(&mut rand::thread_rng())
+                .cloned()
+                .unwrap_or_default())
+        }
+        Macro::File { path } => std::fs::read_to_string(path)
+            .map_err(|e| DomainError::Validation(format!("file macro ({path}): {e}"))),
         // Clipboard needs the system clipboard — resolved in Db::expand, not here.
         Macro::Clipboard => Err(DomainError::Validation(
             "clipboard macro must be evaluated via Db::expand".into(),
@@ -201,6 +211,33 @@ mod tests {
         assert_eq!(evaluate_macro(&m, &HashMap::new(), fixed_now()).unwrap(), "14");
         let m2 = Macro::Math { expr: "10/4".into() };
         assert_eq!(evaluate_macro(&m2, &HashMap::new(), fixed_now()).unwrap(), "2.5");
+    }
+
+    #[test]
+    fn macro_env_value_or_empty() {
+        std::env::set_var("PHRASEXP_TEST_ENV_VAR", "hello");
+        let set = Macro::Env { var: "PHRASEXP_TEST_ENV_VAR".into() };
+        assert_eq!(evaluate_macro(&set, &HashMap::new(), fixed_now()).unwrap(), "hello");
+        let unset = Macro::Env { var: "PHRASEXP_NO_SUCH_VAR_ZZZ".into() };
+        assert_eq!(evaluate_macro(&unset, &HashMap::new(), fixed_now()).unwrap(), "");
+    }
+
+    #[test]
+    fn macro_pick_returns_an_option() {
+        let m = Macro::Pick { options: vec!["a".into(), "b".into(), "c".into()] };
+        for _ in 0..20 {
+            let v = evaluate_macro(&m, &HashMap::new(), fixed_now()).unwrap();
+            assert!(["a", "b", "c"].contains(&v.as_str()));
+        }
+    }
+
+    #[test]
+    fn macro_file_reads_contents() {
+        let path = std::env::temp_dir().join("phrasexp_macro_file_test.txt");
+        std::fs::write(&path, "file body").unwrap();
+        let m = Macro::File { path: path.to_string_lossy().into_owned() };
+        assert_eq!(evaluate_macro(&m, &HashMap::new(), fixed_now()).unwrap(), "file body");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -102,6 +102,18 @@ pub enum Macro {
     Nested {
         phrase_id: String,
     },
+    /// Phase 3: value of an environment variable.
+    Env {
+        var: String,
+    },
+    /// Phase 3: pick one option at random from a list.
+    Pick {
+        options: Vec<String>,
+    },
+    /// Phase 3: contents of a file at the given path.
+    File {
+        path: String,
+    },
 }
 
 fn max_default() -> i64 {
