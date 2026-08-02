@@ -90,6 +90,7 @@ pub fn get_phrase(phrase_id: String, state: State<'_, AppState>) -> Result<Phras
 pub fn create_phrase(
     mut payload: PhraseCreate,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<Phrase, ApiError> {
     payload.normalize()?;
     let phrase = Phrase {
@@ -107,6 +108,7 @@ pub fn create_phrase(
     };
     let saved = state.db.create_phrase(&phrase)?;
     let _ = crate::triggers::rebuild_index(&state.db, &state.abbrev_index);
+    crate::reregister_hotkeys(&app);
     Ok(saved)
 }
 
@@ -115,6 +117,7 @@ pub fn update_phrase(
     phrase_id: String,
     payload: PhraseUpdate,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<Phrase, ApiError> {
     let existing = state
         .db
@@ -126,15 +129,21 @@ pub fn update_phrase(
     let updated = apply_update(existing, payload)?;
     let saved = state.db.update_phrase(&updated)?;
     let _ = crate::triggers::rebuild_index(&state.db, &state.abbrev_index);
+    crate::reregister_hotkeys(&app);
     Ok(saved)
 }
 
 #[tauri::command]
-pub fn delete_phrase(phrase_id: String, state: State<'_, AppState>) -> Result<(), ApiError> {
+pub fn delete_phrase(
+    phrase_id: String,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), ApiError> {
     if state.db.soft_delete_phrase(&phrase_id)?.is_none() {
         return Err(not_found(format!("phrase {phrase_id} not found")));
     }
     let _ = crate::triggers::rebuild_index(&state.db, &state.abbrev_index);
+    crate::reregister_hotkeys(&app);
     Ok(())
 }
 
@@ -368,22 +377,14 @@ pub fn set_settings(
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<Settings, ApiError> {
-    let prev = state.db.load_settings()?;
     let saved = state.db.save_settings(&payload)?;
 
     // Apply runtime side-effects.
     state.autotext_enabled.store(saved.autotext_enabled, Ordering::Relaxed);
     state.clipboard_enabled.store(saved.clipboard_enabled, Ordering::Relaxed);
 
-    // Popup hotkey changed → re-register.
-    if saved.popup_hotkey != prev.popup_hotkey {
-        use tauri_plugin_global_shortcut::GlobalShortcutExt;
-        let gs = app.global_shortcut();
-        let _ = gs.unregister_all();
-        if let Some(sc) = crate::parse_hotkey(&saved.popup_hotkey) {
-            let _ = gs.register(sc);
-        }
-    }
+    // Phase 2: re-register popup + per-phrase hotkeys (cheap; covers popup-hotkey changes).
+    crate::reregister_hotkeys(&app);
 
     // Launch-on-login.
     use tauri_plugin_autostart::ManagerExt;

@@ -14,6 +14,8 @@ use tauri::{
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
+use crate::domain::models::TriggerType;
+
 /// Shared application state.
 pub struct AppState {
     pub db: Arc<db::Db>,
@@ -23,6 +25,8 @@ pub struct AppState {
     pub autotext_running: Arc<AtomicBool>,
     pub autotext_events: Arc<AtomicU64>,
     pub clipboard_enabled: Arc<AtomicBool>,
+    /// Registered per-phrase hotkeys: (shortcut, phrase_id).
+    pub hotkey_registry: Arc<Mutex<Vec<(Shortcut, String)>>>,
 }
 
 /// Summon the search popup near the cursor (M3 UX).
@@ -48,6 +52,50 @@ fn show_main(app: &tauri::AppHandle) {
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
+}
+
+/// Inject a phrase by id directly into the focused app (per-phrase hotkeys).
+fn inject_phrase_by_id(app: &tauri::AppHandle, id: &str) {
+    let state = app.state::<AppState>();
+    if let Ok(Some(phrase)) = state.db.get_phrase(id) {
+        if phrase.deleted_at.is_none() {
+            if let Ok(output) = state.db.expand(&phrase, &std::collections::HashMap::new()) {
+                let _ = state.injector.type_text(&output);
+            }
+        }
+    }
+}
+
+/// Re-register the popup hotkey + all per-phrase hotkeys; rebuild the lookup registry.
+pub fn reregister_hotkeys(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    let mut reg: Vec<(Shortcut, String)> = Vec::new();
+
+    // popup hotkey (from settings)
+    if let Ok(settings) = state.db.load_settings() {
+        if let Some(sc) = parse_hotkey(&settings.popup_hotkey) {
+            let _ = gs.register(sc);
+        }
+    }
+    // per-phrase hotkeys
+    if let Ok(phrases) = state.db.list_phrases(None, None, false) {
+        for p in phrases {
+            for t in &p.triggers {
+                if t.kind == TriggerType::Hotkey {
+                    if let Some(key) = &t.key {
+                        if let Some(sc) = parse_hotkey(key) {
+                            let _ = gs.register(sc);
+                            reg.push((sc, p.id.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let registry = state.hotkey_registry.clone();
+    let _ = registry.lock().map(|mut g| *g = reg);
 }
 
 /// Parse a hotkey string like "Control+Alt+Space" into a Shortcut.
@@ -104,9 +152,25 @@ pub fn run() {
         ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
-                        show_popup(app);
+                        // Per-phrase hotkey? -> inject that phrase directly. Else -> popup.
+                        let phrase_id = app
+                            .state::<AppState>()
+                            .hotkey_registry
+                            .lock()
+                            .map(|reg| {
+                                reg.iter()
+                                    .find(|(sc, _)| sc == shortcut)
+                                    .map(|(_, id)| id.clone())
+                            })
+                            .ok()
+                            .flatten();
+                        if let Some(id) = phrase_id {
+                            inject_phrase_by_id(app, &id);
+                        } else {
+                            show_popup(app);
+                        }
                     }
                 })
                 .build(),
@@ -157,14 +221,13 @@ pub fn run() {
                 autotext_running: autotext.running,
                 autotext_events: autotext.events_seen,
                 clipboard_enabled,
+                hotkey_registry: Arc::new(Mutex::new(Vec::new())),
             });
 
-            // Register the popup hotkey from settings (default Control+Alt+Space).
+            // Phase 2: register the popup hotkey + all per-phrase hotkeys.
             #[cfg(desktop)]
             {
-                if let Some(sc) = parse_hotkey(&settings.popup_hotkey) {
-                    let _ = app.global_shortcut().register(sc);
-                }
+                reregister_hotkeys(app.handle());
             }
 
             // M5: system tray (Show / Quit).
