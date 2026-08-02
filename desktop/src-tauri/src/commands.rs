@@ -248,6 +248,53 @@ pub fn folder_counts(state: State<'_, AppState>) -> Result<Vec<(String, u32)>, A
     Ok(state.db.folder_counts()?)
 }
 
+/// Test the AI connection with a simple prompt.
+#[tauri::command]
+pub fn test_ai(state: State<'_, AppState>) -> Result<String, ApiError> {
+    let settings = state.db.load_settings()?;
+    let result = crate::triggers::ai::complete(&settings, "Say hello in one word.");
+    match result {
+        Ok(text) => Ok(format!("✅ AI works! Response: {text}")),
+        Err(e) => Err(ApiError::from(e)),
+    }
+}
+
+/// Fetch available models from the provider's /models endpoint.
+#[tauri::command]
+pub fn list_ai_models(state: State<'_, AppState>) -> Result<Vec<String>, ApiError> {
+    let settings = state.db.load_settings()?;
+    if settings.ai_api_key.is_empty() {
+        return Err(ApiError::from(DomainError::Validation(
+            "Enter an API key first".into(),
+        )));
+    }
+    let base = settings.ai_base_url.trim_end_matches('/');
+    let url = format!("{base}/models");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| {
+            ApiError::from(DomainError::Validation(format!("http client: {e}")))
+        })?;
+    let resp = client
+        .get(&url)
+        .bearer_auth(&settings.ai_api_key)
+        .send()
+        .map_err(|e| ApiError::from(DomainError::Validation(format!("request: {e}"))))?;
+    let val: serde_json::Value = resp
+        .json()
+        .map_err(|e| ApiError::from(DomainError::Validation(format!("parse: {e}"))))?;
+    let models = val["data"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m["id"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(models)
+}
+
 // -- Library import/export ------------------------------------------------- //
 /// Export the whole library (folders + active phrases) as JSON.
 #[tauri::command]

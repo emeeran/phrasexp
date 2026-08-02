@@ -10,9 +10,75 @@
   let csvInput: HTMLInputElement | undefined = $state();
   let ahkInput: HTMLInputElement | undefined = $state();
 
+  // AI provider presets
+  const PROVIDERS: Record<string, { name: string; baseUrl: string; models: string[] }> = {
+    groq: { name: "Groq", baseUrl: "https://api.groq.com/openai/v1", models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"] },
+    deepseek: { name: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", models: ["deepseek-chat", "deepseek-reasoner"] },
+    openai: { name: "OpenAI", baseUrl: "https://api.openai.com/v1", models: ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"] },
+    custom: { name: "Custom", baseUrl: "", models: [] },
+  };
+
+  let currentProvider = $state("groq");
+  let modelList = $state<string[]>([]);
+  let testing = $state(false);
+  let testResult = $state<string | null>(null);
+  let refreshing = $state(false);
+
+  function detectProvider(baseUrl: string): string {
+    for (const [key, p] of Object.entries(PROVIDERS)) {
+      if (key === "custom") continue;
+      if (baseUrl.includes(p.baseUrl.replace("https://", "").split("/")[0])) return key;
+    }
+    return "custom";
+  }
+
+  function onProviderChange(e: Event) {
+    const key = (e.target as HTMLSelectElement).value;
+    currentProvider = key;
+    if (s && key !== "custom") {
+      s.ai_base_url = PROVIDERS[key].baseUrl;
+      modelList = [...PROVIDERS[key].models];
+      if (!modelList.includes(s.ai_model)) s.ai_model = modelList[0] ?? "";
+    }
+  }
+
+  async function refreshModels() {
+    if (!s) return;
+    refreshing = true;
+    testResult = null;
+    try {
+      // Save current settings first so the backend has the latest key/url
+      s = await api.setSettings(s);
+      const models = await api.listAiModels();
+      modelList = models.sort();
+      testResult = `Loaded ${models.length} models`;
+    } catch (e) {
+      testResult = errMsg(e);
+    } finally {
+      refreshing = false;
+    }
+  }
+
+  async function testConnection() {
+    if (!s) return;
+    testing = true;
+    testResult = null;
+    try {
+      s = await api.setSettings(s);
+      const result = await api.testAi();
+      testResult = result;
+    } catch (e) {
+      testResult = errMsg(e);
+    } finally {
+      testing = false;
+    }
+  }
+
   onMount(async () => {
     try {
       s = await api.getSettings();
+      currentProvider = detectProvider(s?.ai_base_url ?? "");
+      modelList = [...(PROVIDERS[currentProvider]?.models ?? [])];
     } catch (e) {
       error = errMsg(e);
     }
@@ -87,15 +153,15 @@
     </label>
     <label class="toggle">
       <input type="checkbox" bind:checked={s.clipboard_enabled} />
-      <span>Capture clipboard history <span class="faint">— auto-record text copies</span></span>
+      <span>Capture clipboard history</span>
     </label>
     <label class="toggle">
       <input type="checkbox" bind:checked={s.spellcheck_enabled} />
-      <span>Spellcheck <span class="faint">— auto-correct typos as you type</span></span>
+      <span>Spellcheck <span class="faint">— auto-correct typos</span></span>
     </label>
     <label class="toggle">
       <input type="checkbox" bind:checked={s.case_adapt_enabled} />
-      <span>Case adaptation <span class="faint">— SIG → ALL CAPS, Sig → Title</span></span>
+      <span>Case adaptation <span class="faint">— SIG → ALL CAPS</span></span>
     </label>
     <label class="toggle">
       <input type="checkbox" bind:checked={s.autostart} />
@@ -112,21 +178,63 @@
     <strong>AI Integration</strong>
     <label class="toggle">
       <input type="checkbox" bind:checked={s.ai_enabled} />
-      <span>Enable AI macros <span class="faint">— OpenAI-compatible · BYO key</span></span>
+      <span>Enable AI macros <span class="faint">— transform text via LLM</span></span>
     </label>
+
     {#if s.ai_enabled}
-      <div class="field">
-        <label for="ai-url">API base URL</label>
-        <input id="ai-url" bind:value={s.ai_base_url} placeholder="https://api.openai.com/v1" />
+      <div class="row" style="gap:10px">
+        <div class="field" style="flex:1">
+          <label for="ai-provider">Provider</label>
+          <select id="ai-provider" value={currentProvider} onchange={onProviderChange}>
+            {#each Object.entries(PROVIDERS) as [key, p] (key)}
+              <option value={key}>{p.name}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="field" style="flex:1">
+          <label for="ai-model">Model</label>
+          <div class="row" style="gap:4px">
+            {#if modelList.length > 0}
+              <select id="ai-model" bind:value={s.ai_model} style="flex:1">
+                {#each modelList as m (m)}
+                  <option value={m}>{m}</option>
+                {/each}
+              </select>
+            {:else}
+              <input bind:value={s.ai_model} placeholder="model name" style="flex:1" />
+            {/if}
+            <button class="tiny" onclick={refreshModels} disabled={refreshing} title="Fetch available models from the provider">
+              {refreshing ? "…" : "🔄"}
+            </button>
+          </div>
+        </div>
       </div>
+
+      {#if currentProvider === "custom"}
+        <div class="field">
+          <label for="ai-url">API base URL</label>
+          <input id="ai-url" bind:value={s.ai_base_url} placeholder="https://api.example.com/v1" />
+        </div>
+      {/if}
+
       <div class="field">
         <label for="ai-key">API key</label>
-        <input id="ai-key" type="password" bind:value={s.ai_api_key} placeholder="sk-..." />
+        <div class="row" style="gap:6px">
+          <input id="ai-key" type="password" bind:value={s.ai_api_key} placeholder="Enter your API key…" style="flex:1" />
+          <button class="tiny" onclick={testConnection} disabled={testing} title="Test the connection">
+            {testing ? "…" : "✓ Test"}
+          </button>
+        </div>
       </div>
-      <div class="field">
-        <label for="ai-model">Model</label>
-        <input id="ai-model" bind:value={s.ai_model} placeholder="gpt-4o-mini" />
-      </div>
+
+      {#if testResult}
+        <div class={testResult.startsWith("✅") || testResult.startsWith("Loaded") ? "ok-msg" : "error"}>{testResult}</div>
+      {/if}
+
+      <span class="faint">
+        Get a Groq API key at <code>console.groq.com/keys</code> (free tier available).
+        DeepSeek at <code>platform.deepseek.com</code>. OpenAI at <code>platform.openai.com</code>.
+      </span>
     {/if}
 
     <div class="divider"></div>
@@ -152,19 +260,8 @@
 </div>
 
 <style>
-  .toggle {
-    display: flex;
-    gap: 10px;
-    align-items: flex-start;
-    cursor: pointer;
-  }
-  .toggle input {
-    width: auto;
-    margin-top: 3px;
-  }
-  .divider {
-    height: 1px;
-    background: var(--border-soft);
-    margin: 6px 0;
-  }
+  .toggle { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+  .toggle input { width: auto; margin-top: 3px; }
+  .divider { height: 1px; background: var(--border-soft); margin: 6px 0; }
+  .ok-msg { color: var(--ok); font-size: 13px; }
 </style>

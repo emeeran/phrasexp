@@ -400,10 +400,10 @@ pub struct Settings {
 }
 
 fn default_ai_base_url() -> String {
-    "https://api.openai.com/v1".to_string()
+    "https://api.groq.com/openai/v1".to_string()
 }
 fn default_ai_model() -> String {
-    "gpt-4o-mini".to_string()
+    "llama-3.3-70b-versatile".to_string()
 }
 
 impl Settings {

@@ -94,6 +94,8 @@ export const api = {
   clearClipboard: () => call<void>("clear_clipboard"),
   resetDatabase: () => call<void>("reset_database"),
   folderCounts: () => call<[string, number][]>("folder_counts"),
+  testAi: () => call<string>("test_ai"),
+  listAiModels: () => call<string[]>("list_ai_models"),
 };
 
 export function errMsg(e: unknown): string {

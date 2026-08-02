@@ -347,6 +347,8 @@ pub fn run() {
             commands::clear_clipboard,
             commands::reset_database,
             commands::folder_counts,
+            commands::test_ai,
+            commands::list_ai_models,
             commands::export_library,
             commands::import_csv,
             commands::import_ahk,
