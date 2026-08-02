@@ -254,7 +254,7 @@ pub fn start(
                             let drop_n = buffer.len() - MAX_BUFFER;
                             buffer.drain(0..drop_n);
                         }
-                        maybe_expand(&mut buffer, &idx, &database, &inj, &inj_flag, &cur, &app_h);
+                        maybe_expand(&mut buffer, &idx, &database, &*inj, &inj_flag, &cur, &app_h);
                     } else {
                         // Unmapped key: the buffer is no longer a reliable suffix.
                         buffer.clear();
@@ -287,7 +287,7 @@ fn maybe_expand(
     buffer: &mut String,
     idx: &Mutex<AbbrevIndex>,
     db: &Db,
-    inj: &Arc<dyn Injector>,
+    inj: &dyn Injector,
     inj_flag: &Arc<AtomicBool>,
     current: &Mutex<Option<String>>,
     app: &tauri::AppHandle,
@@ -334,7 +334,7 @@ fn maybe_expand(
     inj_flag.store(true, Ordering::Relaxed);
     let n = abbr.chars().count();
     let _ = inj.backspace(n);
-    let _ = inj.type_text(&output);
+    let _ = crate::triggers::inject::deliver(inj, phrase.content_type, &output);
     inj_flag.store(false, Ordering::Relaxed);
     buffer.clear();
 }

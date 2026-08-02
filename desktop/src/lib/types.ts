@@ -1,7 +1,7 @@
 // TypeScript mirror of the Rust domain models (src-tauri/src/domain/models.rs).
 // Keep these in sync with the Rust structs — the Tauri command layer serializes 1:1.
 
-export type ContentType = "plain" | "richtext" | "html" | "word";
+export type ContentType = "plain" | "markdown" | "richtext" | "html" | "word";
 export type TriggerType = "autotext" | "hotkey";
 
 export interface DateTimeMacro {

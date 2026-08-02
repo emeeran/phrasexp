@@ -7,14 +7,20 @@
 use std::process::Command;
 use std::sync::Arc;
 
-use enigo::{Direction::Click, Enigo, Key, Keyboard, Settings};
+use enigo::{
+    Direction::{Click, Press, Release},
+    Enigo, Key, Keyboard, Settings,
+};
 
 use crate::domain::error::{DomainError, DomainResult};
+use crate::domain::models::ContentType;
 
-/// Inject text / backspaces into the currently focused application.
+/// Inject text / backspaces / rich paste into the currently focused application.
 pub trait Injector: Send + Sync {
     fn type_text(&self, text: &str) -> DomainResult<()>;
     fn backspace(&self, n: usize) -> DomainResult<()>;
+    /// Phase 3: put HTML on the clipboard and paste (Ctrl+V) — for Markdown phrases.
+    fn paste_html(&self, html: &str, alt_text: &str) -> DomainResult<()>;
 }
 
 /// Windows, macOS, Linux-X11 (enigo uses X11/XTest on Linux).
@@ -24,7 +30,6 @@ impl Injector for EnigoInjector {
     fn type_text(&self, text: &str) -> DomainResult<()> {
         let mut enigo = Enigo::new(&Settings::default())
             .map_err(|e| DomainError::Validation(format!("enigo init: {e}")))?;
-        // enigo 0.6: text()/key() return InputResult (ignored here); init is the fallible step.
         let _ = enigo.text(text);
         Ok(())
     }
@@ -35,6 +40,21 @@ impl Injector for EnigoInjector {
         for _ in 0..n {
             let _ = enigo.key(Key::Backspace, Click);
         }
+        Ok(())
+    }
+
+    fn paste_html(&self, html: &str, alt_text: &str) -> DomainResult<()> {
+        let mut clip = arboard::Clipboard::new()
+            .map_err(|e| DomainError::Validation(format!("clipboard: {e}")))?;
+        clip.set_html(html, Some(alt_text))
+            .map_err(|e| DomainError::Validation(format!("set_html: {e}")))?;
+        let mut enigo = Enigo::new(&Settings::default())
+            .map_err(|e| DomainError::Validation(format!("enigo init: {e}")))?;
+        // Ctrl+V
+        let _ = enigo.key(Key::Control, Press);
+        let _ = enigo.key(Key::Unicode('v'), Press);
+        let _ = enigo.key(Key::Unicode('v'), Release);
+        let _ = enigo.key(Key::Control, Release);
         Ok(())
     }
 }
@@ -68,6 +88,44 @@ impl Injector for YdotoolInjector {
         }
         Ok(())
     }
+
+    fn paste_html(&self, html: &str, alt_text: &str) -> DomainResult<()> {
+        let mut clip = arboard::Clipboard::new()
+            .map_err(|e| DomainError::Validation(format!("clipboard: {e}")))?;
+        clip.set_html(html, Some(alt_text))
+            .map_err(|e| DomainError::Validation(format!("set_html: {e}")))?;
+        // ydotool: 29=LeftCtrl, 47=v → press ctrl, press v, release v, release ctrl.
+        let _ = Command::new("ydotool")
+            .args(["key", "29:1", "47:1", "47:0", "29:0"])
+            .status()
+            .map_err(|e| DomainError::Validation(format!("ydotool key: {e}")))?;
+        Ok(())
+    }
+}
+
+/// Deliver an expansion according to its content type.
+pub fn deliver(
+    injector: &dyn Injector,
+    content_type: ContentType,
+    text: &str,
+) -> DomainResult<()> {
+    match content_type {
+        ContentType::Markdown => injector.paste_html(&markdown_to_html(text), text),
+        _ => injector.type_text(text),
+    }
+}
+
+/// Render Markdown source to an HTML fragment (Phase 3).
+fn markdown_to_html(md: &str) -> String {
+    use pulldown_cmark::{Options, Parser, html};
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_TABLES);
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    opts.insert(Options::ENABLE_TASKLISTS);
+    let parser = Parser::new_ext(md, opts);
+    let mut out = String::new();
+    html::push_html(&mut out, parser);
+    out
 }
 
 /// Pick the injector for the current OS/session (ADR 0001).

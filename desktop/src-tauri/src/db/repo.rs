@@ -63,6 +63,7 @@ fn segments_preview(segments: &[Segment]) -> String {
 fn content_type_str(c: ContentType) -> &'static str {
     match c {
         ContentType::Plain => "plain",
+        ContentType::Markdown => "markdown",
         ContentType::Richtext => "richtext",
         ContentType::Html => "html",
         ContentType::Word => "word",
@@ -71,6 +72,7 @@ fn content_type_str(c: ContentType) -> &'static str {
 
 fn parse_content_type(s: &str) -> ContentType {
     match s {
+        "markdown" => ContentType::Markdown,
         "richtext" => ContentType::Richtext,
         "html" => ContentType::Html,
         "word" => ContentType::Word,

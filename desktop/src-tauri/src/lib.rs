@@ -105,7 +105,11 @@ fn inject_phrase_by_id(app: &tauri::AppHandle, id: &str) {
             return;
         }
         if let Ok(output) = state.db.expand(&phrase, &std::collections::HashMap::new()) {
-            let _ = state.injector.type_text(&output);
+            let _ = crate::triggers::inject::deliver(
+                &*state.injector,
+                phrase.content_type,
+                &output,
+            );
         }
     }
 }

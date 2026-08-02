@@ -13,7 +13,10 @@ use super::error::{DomainError, DomainResult};
 pub enum ContentType {
     #[default]
     Plain,
-    // Reserved in v1 (delivery is plain-only); rejected at creation/update.
+    /// Phase 3: authored as Markdown, delivered as formatted HTML (clipboard paste)
+    /// with a plain-text fallback.
+    Markdown,
+    // Reserved — not yet supported; rejected at creation/update.
     Richtext,
     Html,
     Word,
@@ -224,10 +227,10 @@ impl Phrase {
                 "phrase body must contain at least one segment".into(),
             ));
         }
-        if self.content_type != ContentType::Plain {
+        if !matches!(self.content_type, ContentType::Plain | ContentType::Markdown) {
             return Err(DomainError::ReservedContentType(format!(
-                "content_type '{}' is reserved (v1 supports plain only)",
-                serde_json::to_string(&self.content_type).unwrap_or_default()
+                "content_type '{:?}' is reserved (supported: plain, markdown)",
+                self.content_type
             )));
         }
         for t in &self.triggers {

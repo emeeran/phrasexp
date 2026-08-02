@@ -191,7 +191,9 @@ pub fn inject_phrase(
     let output = state.db.expand(&phrase, &inputs)?;
     match mode.unwrap_or_default() {
         OutputMode::Copy => copy_to_clipboard(&output)?,
-        OutputMode::Type => state.injector.type_text(&output)?,
+        OutputMode::Type => {
+            crate::triggers::inject::deliver(&*state.injector, phrase.content_type, &output)?
+        }
     }
     Ok(output)
 }
@@ -417,9 +419,9 @@ fn apply_update(existing: Phrase, u: PhraseUpdate) -> DomainResult<Phrase> {
         abbreviation = t.abbreviation.clone();
     }
     let content_type = u.content_type.unwrap_or(existing.content_type);
-    if content_type != ContentType::Plain {
+    if !matches!(content_type, ContentType::Plain | ContentType::Markdown) {
         return Err(DomainError::ReservedContentType(
-            "non-plain content types are reserved in v1".into(),
+            "only plain and markdown content types are supported".into(),
         ));
     }
     Ok(Phrase {

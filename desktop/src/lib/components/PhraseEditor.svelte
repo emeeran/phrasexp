@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Macro, Phrase, PhraseSummary, Segment, TriggerBinding } from "$lib/types";
+  import type { ContentType, Macro, Phrase, PhraseSummary, Segment, TriggerBinding } from "$lib/types";
   import { api, errMsg } from "$lib/invoke";
 
   let {
@@ -30,6 +30,7 @@
   let hotkey = $state(src?.triggers.find((t) => t.type === "hotkey")?.key ?? "");
   let isRegex = $state(src?.triggers.find((t) => t.type === "autotext")?.regex ?? false);
   let appScope = $state(src?.app_scope ?? "");
+  let contentType = $state<ContentType>(src?.content_type ?? "plain");
   let sensitive = $state(src?.sensitive ?? false);
   let segments: Segment[] = $state(
     src?.body ? structuredClone($state.snapshot(src.body)) : [{ type: "text", text: "" }],
@@ -97,6 +98,7 @@
             triggers,
             sensitive,
             app_scope: appScope.trim() || null,
+            content_type: contentType,
           })
         : await api.createPhrase({
             folderId,
@@ -106,6 +108,7 @@
             triggers,
             sensitive,
             app_scope: appScope.trim() || null,
+            content_type: contentType,
           });
       onsaved(saved);
     } catch (e) {
@@ -125,6 +128,21 @@
   <div class="field">
     <label for="pe-name">Name</label>
     <input id="pe-name" bind:value={name} placeholder="Signature" />
+  </div>
+
+  <div class="field">
+    <label for="pe-ct">Content type</label>
+    <select
+      id="pe-ct"
+      value={contentType}
+      onchange={(e) => (contentType = e.currentTarget.value as ContentType)}
+    >
+      <option value="plain">Plain text (typed)</option>
+      <option value="markdown">Markdown (pasted as formatted HTML)</option>
+    </select>
+    {#if contentType === "markdown"}
+      <span class="faint">Markdown phrases paste as formatted HTML where the target supports rich paste; plain-text fallback otherwise. Body segments are Markdown source.</span>
+    {/if}
   </div>
 
   <div class="row" style="gap:10px">
