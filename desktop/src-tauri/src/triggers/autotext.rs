@@ -384,6 +384,7 @@ pub fn start(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn maybe_expand(
     buffer: &mut String,
     idx: &Mutex<AbbrevIndex>,
