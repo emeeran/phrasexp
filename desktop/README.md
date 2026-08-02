@@ -35,6 +35,25 @@ cd desktop
 cargo tauri build      # produces bundles in src-tauri/target/release/bundle
 ```
 
+## Portable mode (Phase 8)
+By default the database lives in the OS app-data dir (`~/.local/share/com.phrasexp.app/phrasexp.db`
+on Linux). To run portably (e.g. from a USB stick), create an empty marker file next to the
+executable:
+```bash
+touch /path/to/phraseexp    # the install dir
+touch /path/to/phrasexp.portable
+```
+When `phrasexp.portable` is present, `phrasexp.db` is read/written next to the executable instead
+of the app-data dir.
+
+## At-rest encryption (planned — not yet enabled)
+Full database encryption (SQLCipher) is designed but deliberately not rushed: switching the key on
+an existing plaintext DB risks data loss, and it needs a decision on the key source
+(**master passphrase** with a launch-time unlock prompt vs **OS keychain** transparent key via the
+`keyring` crate). Plan: generate a random 32-byte key on first run, store it in the OS keyring,
+open the DB with `PRAGMA key`, and migrate any existing plaintext DB once. Until then, the AI API
+key (if set) is stored in plaintext in the local DB.
+
 ## Platform notes
 | Platform | Silent autotext | Hotkey + popup injection | Notes |
 |---|---|---|---|

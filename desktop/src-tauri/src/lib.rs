@@ -42,6 +42,22 @@ fn start_app_poller(current: Arc<Mutex<Option<String>>>) {
     });
 }
 
+/// Phase 8: resolve the DB path — portable (next to the exe, if `phrasexp.portable`
+/// marker exists) or the OS app-data directory otherwise.
+fn resolve_db_path(app: &tauri::App) -> std::path::PathBuf {
+    if let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
+        if exe_dir.join("phrasexp.portable").exists() {
+            return exe_dir.join("phrasexp.db");
+        }
+    }
+    let dir = app.path().app_data_dir().expect("app data dir");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("phrasexp.db")
+}
+
 /// Summon the search popup near the cursor (M3 UX).
 fn show_popup(app: &tauri::AppHandle) {
     let Some(win) = app.get_webview_window("popup") else {
@@ -213,10 +229,9 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            // FR-11: persist to the OS app-data dir (phrasexp.db).
-            let dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&dir).ok();
-            let db_path = dir.join("phrasexp.db");
+            // FR-11 + Phase 8 portable mode: DB lives next to the executable if a
+            // `phrasexp.portable` marker is present; otherwise the OS app-data dir.
+            let db_path = resolve_db_path(app);
             let db = Arc::new(db::Db::open(db_path.to_str().expect("valid db path"))?);
 
             // M5: load settings + apply runtime flags.
