@@ -28,9 +28,11 @@ const MAX_BUFFER: usize = 64;
 
 /// abbreviation -> phrase_ids. Literals are suffix-matched; regexes are pattern-matched
 /// (a pattern triggers when some match ends at the buffer's end).
+/// Also holds a spellcheck dictionary (Phase 5) built from phrase bodies.
 pub struct AbbrevIndex {
     literals: HashMap<String, Vec<String>>,
     regexes: Vec<(regex::Regex, String)>,
+    dict: std::collections::HashSet<String>,
 }
 
 impl AbbrevIndex {
@@ -38,12 +40,14 @@ impl AbbrevIndex {
         Self {
             literals: HashMap::new(),
             regexes: Vec::new(),
+            dict: std::collections::HashSet::new(),
         }
     }
 
     pub fn from_phrases(phrases: &[Phrase]) -> Self {
         let mut literals: HashMap<String, Vec<String>> = HashMap::new();
         let mut regexes: Vec<(regex::Regex, String)> = Vec::new();
+        let mut dict = std::collections::HashSet::new();
         for p in phrases {
             let is_regex = p
                 .triggers
@@ -60,12 +64,50 @@ impl AbbrevIndex {
             } else {
                 literals.entry(abbr.clone()).or_default().push(p.id.clone());
             }
+            // Phase 5: extract words from phrase body for the spellcheck dictionary.
+            for seg in &p.body {
+                if let Segment::Text { text } = seg {
+                    for word in text.split(|c: char| !c.is_alphanumeric()) {
+                        let w = word.to_lowercase();
+                        if w.len() >= 3 {
+                            dict.insert(w);
+                        }
+                    }
+                }
+            }
         }
-        Self { literals, regexes }
+        Self {
+            literals,
+            regexes,
+            dict,
+        }
     }
 
     pub fn len(&self) -> usize {
         self.literals.len() + self.regexes.len()
+    }
+
+    pub fn dict_len(&self) -> usize {
+        self.dict.len()
+    }
+
+    /// Phase 5: find the nearest dictionary word to `word` (Levenshtein ≤ 2).
+    pub fn correct(&self, word: &str) -> Option<String> {
+        let lower = word.to_lowercase();
+        if self.dict.contains(&lower) {
+            return None; // already correct
+        }
+        let mut best: Option<(usize, &str)> = None;
+        for entry in &self.dict {
+            let d = levenshtein(&lower, entry);
+            if d <= 2 {
+                match best {
+                    Some((bd, _)) if bd <= d => {}
+                    _ => best = Some((d, entry)),
+                }
+            }
+        }
+        best.map(|(_, w)| w.to_string())
     }
 
     /// Longest literal suffix first, then regexes. Returns (text to erase, candidate ids).
@@ -111,6 +153,57 @@ fn regex_suffix_match(re: &regex::Regex, buffer: &str) -> Option<String> {
         }
     }
     found
+}
+
+/// Phase 5: Levenshtein edit distance (no external dep).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (m, n) = (a.len(), b.len());
+    if m == 0 {
+        return n;
+    }
+    if n == 0 {
+        return m;
+    }
+    let mut prev: Vec<usize> = (0..=n).collect();
+    let mut curr = vec![0usize; n + 1];
+    for i in 1..=m {
+        curr[0] = i;
+        for j in 1..=n {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[n]
+}
+
+/// Phase 5: on a word boundary (space), check the last word against the dictionary
+/// and auto-correct if a close match is found.
+fn maybe_correct(
+    buffer: &mut String,
+    idx: &Mutex<AbbrevIndex>,
+    inj: &dyn Injector,
+    inj_flag: &Arc<AtomicBool>,
+) {
+    let trimmed = buffer.trim_end();
+    let word_start = trimmed.rfind(' ').map(|i| i + 1).unwrap_or(0);
+    let word = &trimmed[word_start..];
+    if word.len() < 3 {
+        return;
+    }
+    let correction = idx.lock().ok().and_then(|i| i.correct(word));
+    if let Some(corrected) = correction {
+        inj_flag.store(true, Ordering::Relaxed);
+        let word_chars = word.chars().count();
+        let _ = inj.backspace(word_chars + 1); // erase "word "
+        let _ = inj.type_text(&format!("{corrected} "));
+        inj_flag.store(false, Ordering::Relaxed);
+        // Update the buffer to reflect the correction.
+        let prefix = &buffer[..word_start.min(buffer.len())];
+        *buffer = format!("{prefix}{corrected} ");
+    }
 }
 
 fn is_shift(k: Key) -> bool {
@@ -255,6 +348,9 @@ pub fn start(
                             buffer.drain(0..drop_n);
                         }
                         maybe_expand(&mut buffer, &idx, &database, &*inj, &inj_flag, &cur, &app_h);
+                        if ch == ' ' && !buffer.is_empty() {
+                            maybe_correct(&mut buffer, &idx, &*inj, &inj_flag);
+                        }
                     } else {
                         // Unmapped key: the buffer is no longer a reliable suffix.
                         buffer.clear();
@@ -476,5 +572,32 @@ mod tests {
         assert_eq!(ids.len(), 1);
         // doesn't match when the pattern isn't a suffix
         assert!(idx.match_suffix(":wave middle").is_none());
+    }
+
+    #[test]
+    fn levenshtein_basics() {
+        assert_eq!(levenshtein("hello", "hello"), 0);
+        assert_eq!(levenshtein("teh", "the"), 2);
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("", "abc"), 3);
+    }
+
+    #[test]
+    fn spellcheck_corrects_typos() {
+        let idx = AbbrevIndex::from_phrases(&[phrase(
+            "p1",
+            Some("hi"),
+            vec![Segment::Text {
+                text: "the quick brown fox".into(),
+            }],
+        )]);
+        // "teh" is distance 2 from "the" → corrected
+        assert_eq!(idx.correct("teh").unwrap(), "the");
+        // "the" is already in dict → no correction
+        assert!(idx.correct("the").is_none());
+        // "xyz" has no close match → None
+        assert!(idx.correct("xyz").is_none());
+        // dict has 4 words ≥3 chars
+        assert_eq!(idx.dict_len(), 4);
     }
 }
