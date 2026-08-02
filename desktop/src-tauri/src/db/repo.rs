@@ -113,6 +113,7 @@ impl Db {
             "ALTER TABLE settings ADD COLUMN ai_base_url TEXT NOT NULL DEFAULT 'https://api.openai.com/v1'",
             "ALTER TABLE settings ADD COLUMN ai_api_key TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE settings ADD COLUMN ai_model TEXT NOT NULL DEFAULT 'gpt-4o-mini'",
+            "ALTER TABLE phrases ADD COLUMN app_scope TEXT",
         ] {
             let _ = conn.execute(stmt, []);
         }
