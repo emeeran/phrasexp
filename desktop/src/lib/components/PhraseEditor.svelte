@@ -28,6 +28,7 @@
   let name = $state(src?.name ?? "");
   let abbreviation = $state(src?.abbreviation ?? "");
   let hotkey = $state(src?.triggers.find((t) => t.type === "hotkey")?.key ?? "");
+  let isRegex = $state(src?.triggers.find((t) => t.type === "autotext")?.regex ?? false);
   let sensitive = $state(src?.sensitive ?? false);
   let segments: Segment[] = $state(
     src?.body ? structuredClone($state.snapshot(src.body)) : [{ type: "text", text: "" }],
@@ -73,7 +74,7 @@
     if (segments.length === 0) return (error = "Body needs at least one segment");
     const triggers: TriggerBinding[] = [];
     if (abbreviation.trim())
-      triggers.push({ type: "autotext", abbreviation: abbreviation.trim() });
+      triggers.push({ type: "autotext", abbreviation: abbreviation.trim(), regex: isRegex });
     if (hotkey.trim()) triggers.push({ type: "hotkey", key: hotkey.trim() });
 
     const body = $state.snapshot(segments) as Segment[];
@@ -125,6 +126,11 @@
       <input id="pe-hot" bind:value={hotkey} placeholder="ctrl+shift+b" />
     </div>
   </div>
+
+  <label class="row" style="gap:8px; cursor:pointer">
+    <input type="checkbox" bind:checked={isRegex} style="width:auto" />
+    <span class="muted">Regex abbreviation — triggers when the pattern matches the end of what you type (e.g. <code>:[a-z]+</code>)</span>
+  </label>
 
   <label class="row" style="gap:8px; cursor:pointer">
     <input type="checkbox" bind:checked={sensitive} style="width:auto" />

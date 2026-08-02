@@ -79,6 +79,7 @@ export interface TriggerBinding {
   type: TriggerType;
   abbreviation?: string | null;
   key?: string | null;
+  regex?: boolean;
 }
 
 export interface Folder {

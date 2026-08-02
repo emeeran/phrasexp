@@ -277,6 +277,7 @@ pub fn import_csv(
                 kind: TriggerType::Autotext,
                 abbreviation: Some(abbr.clone()),
                 key: None,
+                regex: false,
             }]
         };
         let name: String = if text.is_empty() {

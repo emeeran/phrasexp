@@ -135,6 +135,13 @@ pub struct TriggerBinding {
     pub abbreviation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// Phase 2: when true (autotext), `abbreviation` is a regex matched against the typed buffer.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub regex: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl TriggerBinding {

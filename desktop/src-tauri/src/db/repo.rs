@@ -812,6 +812,7 @@ mod tests {
             kind: TriggerType::Autotext,
             abbreviation: Some("sig".into()),
             key: None,
+            regex: false,
         }];
         db.update_phrase(&a).unwrap();
         let mut b = new_phrase(&db, &f.id, "B", vec![Segment::Text { text: "b".into() }]);
@@ -837,6 +838,7 @@ mod tests {
             kind: TriggerType::Autotext,
             abbreviation: Some("sig".into()),
             key: None,
+            regex: false,
         }];
         db.update_phrase(&p).unwrap();
         db.soft_delete_phrase(&p.id).unwrap();
@@ -897,6 +899,7 @@ mod tests {
             kind: TriggerType::Autotext,
             abbreviation: Some("hi".into()),
             key: None,
+            regex: false,
         }];
         db.update_phrase(&p).unwrap();
         let trig = TriggerRequest {

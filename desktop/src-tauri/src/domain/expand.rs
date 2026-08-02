@@ -177,6 +177,7 @@ mod tests {
             kind: crate::domain::models::TriggerType::Autotext,
             abbreviation: None,
             key: None,
+            regex: false,
         };
         assert!(t.validate().is_err());
     }

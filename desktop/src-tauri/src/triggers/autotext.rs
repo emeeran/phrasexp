@@ -20,43 +20,58 @@ use rdev::{listen, Event, EventType, Key};
 
 use crate::db::Db;
 use crate::domain::case_adapt;
-use crate::domain::models::{Macro, Phrase, Segment};
+use crate::domain::models::{Macro, Phrase, Segment, TriggerType};
 use crate::domain::DomainResult;
 use crate::triggers::Injector;
 
 const MAX_BUFFER: usize = 64;
 
-/// abbreviation -> phrase_ids, for non-deleted phrases that carry an abbreviation.
-/// Multiple phrases may share an abbreviation (resolved by a multi-match chooser).
-#[derive(Default)]
-pub struct AbbrevIndex(HashMap<String, Vec<String>>);
+/// abbreviation -> phrase_ids. Literals are suffix-matched; regexes are pattern-matched
+/// (a pattern triggers when some match ends at the buffer's end).
+pub struct AbbrevIndex {
+    literals: HashMap<String, Vec<String>>,
+    regexes: Vec<(regex::Regex, String)>,
+}
 
 impl AbbrevIndex {
     pub fn empty() -> Self {
-        Self(HashMap::new())
+        Self {
+            literals: HashMap::new(),
+            regexes: Vec::new(),
+        }
     }
 
     pub fn from_phrases(phrases: &[Phrase]) -> Self {
-        let mut m: HashMap<String, Vec<String>> = HashMap::new();
+        let mut literals: HashMap<String, Vec<String>> = HashMap::new();
+        let mut regexes: Vec<(regex::Regex, String)> = Vec::new();
         for p in phrases {
-            if let Some(a) = &p.abbreviation {
-                if !a.is_empty() {
-                    m.entry(a.clone()).or_default().push(p.id.clone());
+            let is_regex = p
+                .triggers
+                .iter()
+                .any(|t| t.kind == TriggerType::Autotext && t.regex);
+            let Some(abbr) = &p.abbreviation else { continue };
+            if abbr.is_empty() {
+                continue;
+            }
+            if is_regex {
+                if let Ok(re) = regex::Regex::new(abbr) {
+                    regexes.push((re, p.id.clone()));
                 }
+            } else {
+                literals.entry(abbr.clone()).or_default().push(p.id.clone());
             }
         }
-        Self(m)
+        Self { literals, regexes }
     }
 
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.literals.len() + self.regexes.len()
     }
 
-    /// Longest abbreviation the buffer ends with (so "sig" doesn't shadow "signature").
-    /// Returns (abbreviation, candidate phrase_ids).
+    /// Longest literal suffix first, then regexes. Returns (text to erase, candidate ids).
     pub fn match_suffix(&self, buffer: &str) -> Option<(String, Vec<String>)> {
         let mut best: Option<(&str, &Vec<String>)> = None;
-        for (abbr, ids) in &self.0 {
+        for (abbr, ids) in &self.literals {
             if buffer.ends_with(abbr) {
                 match best {
                     Some((b, _)) if b.len() >= abbr.len() => {}
@@ -64,8 +79,38 @@ impl AbbrevIndex {
                 }
             }
         }
-        best.map(|(a, ids)| (a.to_string(), ids.clone()))
+        if let Some((a, ids)) = best {
+            return Some((a.to_string(), ids.clone()));
+        }
+
+        // Regexes: trigger when a match ends at the buffer's end.
+        let mut ids = Vec::new();
+        let mut erase: Option<String> = None;
+        for (re, id) in &self.regexes {
+            if let Some(text) = regex_suffix_match(re, buffer) {
+                ids.push(id.clone());
+                if erase.is_none() {
+                    erase = Some(text);
+                }
+            }
+        }
+        if ids.is_empty() {
+            None
+        } else {
+            Some((erase.unwrap(), ids))
+        }
     }
+}
+
+/// The text of the last regex match that ends at the buffer's end, if any.
+fn regex_suffix_match(re: &regex::Regex, buffer: &str) -> Option<String> {
+    let mut found = None;
+    for m in re.find_iter(buffer) {
+        if m.end() == buffer.len() {
+            found = Some(m.as_str().to_string());
+        }
+    }
+    found
 }
 
 fn is_shift(k: Key) -> bool {
@@ -398,5 +443,27 @@ mod tests {
         );
         assert!(has_inputform(&with_input));
         assert!(!has_inputform(&plain));
+    }
+
+    #[test]
+    fn regex_abbreviation_matches_suffix() {
+        use crate::domain::models::{TriggerBinding, TriggerType};
+        let mut p = phrase(
+            "pr",
+            Some(":[a-z]+"),
+            vec![Segment::Text { text: "🙂".into() }],
+        );
+        p.triggers = vec![TriggerBinding {
+            kind: TriggerType::Autotext,
+            abbreviation: Some(":[a-z]+".into()),
+            key: None,
+            regex: true,
+        }];
+        let idx = AbbrevIndex::from_phrases(&[p]);
+        let (erase, ids) = idx.match_suffix("hi :wave").unwrap();
+        assert_eq!(erase, ":wave");
+        assert_eq!(ids.len(), 1);
+        // doesn't match when the pattern isn't a suffix
+        assert!(idx.match_suffix(":wave middle").is_none());
     }
 }

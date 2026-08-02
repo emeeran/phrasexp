@@ -2830,6 +2830,7 @@ dependencies = [
  "meval",
  "rand",
  "rdev",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
