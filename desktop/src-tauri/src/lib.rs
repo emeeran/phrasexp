@@ -336,6 +336,7 @@ pub fn run() {
             commands::inject_phrase,
             commands::list_clipboard,
             commands::add_clipboard,
+            commands::clear_clipboard,
             commands::export_library,
             commands::import_csv,
             commands::find_duplicates,

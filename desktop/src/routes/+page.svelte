@@ -175,6 +175,15 @@
     }
   }
 
+  async function clearClipboard() {
+    try {
+      await api.clearClipboard();
+      await refreshClipboard();
+    } catch (e) {
+      banner = errMsg(e);
+    }
+  }
+
   let csvInput: HTMLInputElement | undefined = $state();
 
   async function copyPhrase(p: PhraseSummary) {
@@ -304,7 +313,12 @@
     <div class="divider" style="margin:16px 0"></div>
 
     <div class="col" style="gap:6px">
-      <strong>Clipboard</strong>
+      <div class="row between">
+        <strong>Clipboard</strong>
+        {#if clipboard.length > 0}
+          <button class="tiny danger ghost" onclick={clearClipboard}>Clear</button>
+        {/if}
+      </div>
       <div class="row">
         <input bind:value={newClipText} placeholder="Capture text…" onkeydown={(e) => e.key === "Enter" && addClip()} />
         <button onclick={addClip}>+</button>

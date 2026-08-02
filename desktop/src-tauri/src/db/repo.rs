@@ -448,6 +448,13 @@ impl Db {
         Ok(out)
     }
 
+    pub fn clear_clipboard(&self) -> DomainResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM clipboard_entries", [])
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     /// Build a masked summary for list views (FR-8).
     pub fn summary(&self, phrase: &Phrase) -> PhraseSummary {
         let preview = if phrase.sensitive {

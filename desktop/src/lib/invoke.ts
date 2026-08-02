@@ -89,6 +89,7 @@ export const api = {
   listClipboard: (limit = 50) => call<ClipboardEntry[]>("list_clipboard", { limit }),
   addClipboard: (text: string) =>
     call<ClipboardEntry>("add_clipboard", { payload: { text } }),
+  clearClipboard: () => call<void>("clear_clipboard"),
 };
 
 export function errMsg(e: unknown): string {

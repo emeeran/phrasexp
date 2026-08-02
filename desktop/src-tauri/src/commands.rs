@@ -229,6 +229,12 @@ pub fn add_clipboard(
     Ok(entry)
 }
 
+#[tauri::command]
+pub fn clear_clipboard(state: State<'_, AppState>) -> Result<(), ApiError> {
+    state.db.clear_clipboard()?;
+    Ok(())
+}
+
 // -- Library import/export ------------------------------------------------- //
 /// Export the whole library (folders + active phrases) as JSON.
 #[tauri::command]
