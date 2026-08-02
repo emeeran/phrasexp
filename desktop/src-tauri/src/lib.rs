@@ -143,6 +143,7 @@ pub fn run() {
                 Arc::clone(&injector),
                 Arc::clone(&abbrev_index),
                 Arc::clone(&autotext_enabled),
+                app.handle().clone(),
             );
 
             // M5: clipboard auto-capture poller.

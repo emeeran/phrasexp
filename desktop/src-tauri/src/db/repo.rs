@@ -191,27 +191,8 @@ impl Db {
     // ----------------------------------------------------------------------- //
     // Phrases (FR-1, FR-6, FR-7, FR-8, FR-10)
     // ----------------------------------------------------------------------- //
-    fn assert_abbreviation_unique(&self, phrase: &Phrase) -> DomainResult<()> {
-        let conn = self.conn.lock().unwrap();
-        if let Some(abbr) = &phrase.abbreviation {
-            let clash: bool = conn
-                .query_row(
-                    "SELECT 1 FROM phrases \
-                     WHERE abbreviation = ?1 AND deleted_at IS NULL AND id != ?2 LIMIT 1",
-                    params![abbr, phrase.id],
-                    |_| Ok(true),
-                )
-                .optional()
-                .map_err(db_err)?
-                .unwrap_or(false);
-            if clash {
-                return Err(DomainError::Conflict(format!(
-                    "abbreviation '{abbr}' already in use"
-                )));
-            }
-        }
-        Ok(())
-    }
+    // Abbreviation uniqueness is intentionally NOT enforced — multiple phrases may share
+    // an abbreviation; a multi-match selection menu resolves ambiguity (Phase 1).
 
     pub fn create_phrase(&self, phrase: &Phrase) -> DomainResult<Phrase> {
         phrase.validate()?;
@@ -233,7 +214,6 @@ impl Db {
                 )));
             }
         }
-        self.assert_abbreviation_unique(phrase)?;
         let body_json = serde_json::to_string(&phrase.body)
             .map_err(|e| DomainError::Validation(format!("cannot serialize body: {e}")))?;
         let triggers_json = serde_json::to_string(&phrase.triggers)
@@ -334,7 +314,6 @@ impl Db {
                 return Err(DomainError::NotFound(format!("phrase {} not found", phrase.id)));
             }
         }
-        self.assert_abbreviation_unique(phrase)?;
         self.snapshot_current(&phrase.id)?;
         let body_json = serde_json::to_string(&phrase.body)
             .map_err(|e| DomainError::Validation(format!("cannot serialize body: {e}")))?;
@@ -823,7 +802,8 @@ mod tests {
     }
 
     #[test]
-    fn abbreviation_conflict_is_rejected() {
+    fn duplicate_abbreviation_allowed_for_multimatch() {
+        // Phase 1: multiple phrases may share an abbreviation (resolved by a selection menu).
         let db = db();
         let f = new_folder(&db, "Inbox");
         let mut a = new_phrase(&db, &f.id, "A", vec![Segment::Text { text: "a".into() }]);
@@ -836,8 +816,15 @@ mod tests {
         db.update_phrase(&a).unwrap();
         let mut b = new_phrase(&db, &f.id, "B", vec![Segment::Text { text: "b".into() }]);
         b.abbreviation = Some("sig".into());
-        let err = db.create_phrase(&b).unwrap_err();
-        assert!(matches!(err, DomainError::Conflict(_)));
+        // no Conflict — both coexist (set via update since new_phrase already inserted b)
+        db.update_phrase(&b).unwrap();
+        let matches = db
+            .list_phrases(None, Some("sig"), false)
+            .unwrap()
+            .iter()
+            .filter(|p| p.abbreviation.as_deref() == Some("sig"))
+            .count();
+        assert_eq!(matches, 2);
     }
 
     #[test]

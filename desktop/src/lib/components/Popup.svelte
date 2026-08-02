@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { listen } from "@tauri-apps/api/event";
   import { api, errMsg } from "$lib/invoke";
   import type { InputKind, Phrase, PhraseSummary } from "$lib/types";
 
@@ -13,12 +14,12 @@
   let error = $state<string | null>(null);
   let inputEl: HTMLInputElement | undefined = $state();
 
-  // Input-collection mode (for phrases with inputform macros).
-  let mode = $state<"search" | "inputs">("search");
+  // search | inputs (filling input-form fields) | choose (multi-match picker)
+  let mode = $state<"search" | "inputs" | "choose">("search");
   let current = $state<Phrase | null>(null);
   let formInputs = $state<Record<string, string>>({});
-
-  const win_ = win; // silence unused if needed
+  let candidates = $state<PhraseSummary[]>([]);
+  let chooseSelected = $state(0);
 
   const filtered = $derived(
     q.trim()
@@ -61,6 +62,13 @@
     }
   }
 
+  async function injectById(id: string, inputs: Record<string, string> = {}) {
+    // Hide first so focus returns to the target app, then inject after a brief settle.
+    await win.hide();
+    await new Promise((r) => setTimeout(r, 120));
+    await api.injectPhrase(id, inputs);
+  }
+
   async function pick(p: PhraseSummary) {
     if (busy) return;
     busy = true;
@@ -69,7 +77,7 @@
       const full = await api.getPhrase(p.id);
       const fields = fieldsOf(full);
       if (fields.length === 0) {
-        await inject(full, {});
+        await injectById(p.id);
       } else {
         current = full;
         formInputs = defaultsFor(fields);
@@ -83,19 +91,12 @@
     }
   }
 
-  async function inject(phrase: Phrase, inputs: Record<string, string>) {
-    // Hide first so focus returns to the target app, then inject after a brief settle.
-    await win.hide();
-    await new Promise((r) => setTimeout(r, 120));
-    await api.injectPhrase(phrase.id, inputs);
-  }
-
   async function confirmInputs() {
     if (!current || busy) return;
     busy = true;
     error = null;
     try {
-      await inject(current, formInputs);
+      await injectById(current.id, formInputs);
     } catch (e) {
       error = errMsg(e);
     } finally {
@@ -103,9 +104,15 @@
     }
   }
 
+  async function onChoose(ids: string[]) {
+    const all = await api.listPhrases();
+    candidates = all.filter((p) => ids.includes(p.id));
+    chooseSelected = 0;
+    mode = "choose";
+    await tick();
+  }
+
   async function reset() {
-    mode = "search";
-    current = null;
     q = "";
     selected = 0;
     await tick();
@@ -116,21 +123,26 @@
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
-      if (mode === "inputs") {
+      if (mode === "inputs" || mode === "choose") {
         mode = "search";
       } else {
         void win.hide();
       }
-    } else if (mode === "search") {
+      return;
+    }
+    const list = mode === "choose" ? candidates : filtered;
+    const sel = mode === "choose" ? chooseSelected : selected;
+    const setSel = mode === "choose" ? (v: number) => (chooseSelected = v) : (v: number) => (selected = v);
+    if (mode === "search" || mode === "choose") {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        selected = Math.min(selected + 1, Math.max(filtered.length - 1, 0));
+        setSel(Math.min(sel + 1, Math.max(list.length - 1, 0)));
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
-        selected = Math.max(selected - 1, 0);
+        setSel(Math.max(sel - 1, 0));
       } else if (e.key === "Enter") {
         e.preventDefault();
-        const p = filtered[selected];
+        const p = list[sel];
         if (p) void pick(p);
       }
     }
@@ -139,13 +151,21 @@
   onMount(async () => {
     await load();
     await reset();
-    const unlisten = await win.onFocusChanged(({ payload: focused }) => {
+    const unlistenFocus = await win.onFocusChanged(({ payload: focused }) => {
       if (focused) {
         void load();
         void reset();
+      } else {
+        mode = "search"; // reset mode when hidden
       }
     });
-    return unlisten;
+    const unlistenChoose = await listen<string[]>("autotext-choose", (e) => {
+      void onChoose(e.payload);
+    });
+    return () => {
+      void unlistenFocus();
+      void unlistenChoose();
+    };
   });
 </script>
 
@@ -185,6 +205,23 @@
           {busy ? "…" : "Insert"}
         </button>
       </div>
+    </div>
+  {:else if mode === "choose"}
+    <div class="muted" style="padding:2px 4px 6px">Multiple phrases match — pick one:</div>
+    <div class="list scroll">
+      {#each candidates as p, i (p.id)}
+        <button
+          class="item"
+          class:on={i === chooseSelected}
+          onclick={() => pick(p)}
+          onmouseenter={() => (chooseSelected = i)}
+        >
+          <span class="name">{p.name}</span>
+          {#if p.abbreviation}<span class="tag">{p.abbreviation}</span>{/if}
+        </button>
+      {:else}
+        <div class="empty faint">No candidates.</div>
+      {/each}
     </div>
   {:else}
     <input

@@ -26,9 +26,10 @@ use crate::triggers::Injector;
 
 const MAX_BUFFER: usize = 64;
 
-/// abbreviation -> phrase_id, for non-deleted phrases that carry an abbreviation.
+/// abbreviation -> phrase_ids, for non-deleted phrases that carry an abbreviation.
+/// Multiple phrases may share an abbreviation (resolved by a multi-match chooser).
 #[derive(Default)]
-pub struct AbbrevIndex(HashMap<String, String>);
+pub struct AbbrevIndex(HashMap<String, Vec<String>>);
 
 impl AbbrevIndex {
     pub fn empty() -> Self {
@@ -36,11 +37,11 @@ impl AbbrevIndex {
     }
 
     pub fn from_phrases(phrases: &[Phrase]) -> Self {
-        let mut m = HashMap::new();
+        let mut m: HashMap<String, Vec<String>> = HashMap::new();
         for p in phrases {
             if let Some(a) = &p.abbreviation {
                 if !a.is_empty() {
-                    m.insert(a.clone(), p.id.clone());
+                    m.entry(a.clone()).or_default().push(p.id.clone());
                 }
             }
         }
@@ -52,18 +53,18 @@ impl AbbrevIndex {
     }
 
     /// Longest abbreviation the buffer ends with (so "sig" doesn't shadow "signature").
-    /// Returns owned strings so callers need not hold the index lock.
-    pub fn match_suffix(&self, buffer: &str) -> Option<(String, String)> {
-        let mut best: Option<(&str, &str)> = None;
-        for (abbr, id) in &self.0 {
+    /// Returns (abbreviation, candidate phrase_ids).
+    pub fn match_suffix(&self, buffer: &str) -> Option<(String, Vec<String>)> {
+        let mut best: Option<(&str, &Vec<String>)> = None;
+        for (abbr, ids) in &self.0 {
             if buffer.ends_with(abbr) {
                 match best {
                     Some((b, _)) if b.len() >= abbr.len() => {}
-                    _ => best = Some((abbr.as_str(), id.as_str())),
+                    _ => best = Some((abbr.as_str(), ids)),
                 }
             }
         }
-        best.map(|(a, i)| (a.to_string(), i.to_string()))
+        best.map(|(a, ids)| (a.to_string(), ids.clone()))
     }
 }
 
@@ -149,6 +150,7 @@ pub fn start(
     injector: Arc<dyn Injector>,
     index: Arc<Mutex<AbbrevIndex>>,
     enabled: Arc<AtomicBool>,
+    app: tauri::AppHandle,
 ) -> AutotextHandle {
     let events_seen = Arc::new(AtomicU64::new(0));
     let running = Arc::new(AtomicBool::new(false));
@@ -161,6 +163,7 @@ pub fn start(
     let database = db.clone();
     let inj = injector.clone();
     let inj_flag = injecting.clone();
+    let app_h = app.clone();
 
     std::thread::spawn(move || {
         run.store(true, Ordering::Relaxed);
@@ -204,7 +207,7 @@ pub fn start(
                             let drop_n = buffer.len() - MAX_BUFFER;
                             buffer.drain(0..drop_n);
                         }
-                        maybe_expand(&mut buffer, &idx, &database, &inj, &inj_flag);
+                        maybe_expand(&mut buffer, &idx, &database, &inj, &inj_flag, &app_h);
                     } else {
                         // Unmapped key: the buffer is no longer a reliable suffix.
                         buffer.clear();
@@ -239,15 +242,29 @@ fn maybe_expand(
     db: &Db,
     inj: &Arc<dyn Injector>,
     inj_flag: &Arc<AtomicBool>,
+    app: &tauri::AppHandle,
 ) {
     let matched = idx
         .lock()
         .map(|i| i.match_suffix(buffer))
         .ok()
         .flatten();
-    let Some((abbr, id)) = matched else { return };
+    let Some((abbr, ids)) = matched else {
+        return;
+    };
 
-    let Ok(Some(phrase)) = db.get_phrase(&id) else {
+    if ids.len() > 1 {
+        // Multi-match: erase the typed abbreviation and surface a chooser.
+        inj_flag.store(true, Ordering::Relaxed);
+        let _ = inj.backspace(abbr.chars().count());
+        inj_flag.store(false, Ordering::Relaxed);
+        buffer.clear();
+        show_chooser(app, ids);
+        return;
+    }
+
+    let id = &ids[0];
+    let Ok(Some(phrase)) = db.get_phrase(id) else {
         return;
     };
     if phrase.deleted_at.is_some() || has_inputform(&phrase) {
@@ -265,6 +282,22 @@ fn maybe_expand(
     let _ = inj.type_text(&output);
     inj_flag.store(false, Ordering::Relaxed);
     buffer.clear();
+}
+
+/// Surface the multi-match chooser: show the popup near the cursor + emit candidate ids.
+fn show_chooser(app: &tauri::AppHandle, ids: Vec<String>) {
+    use device_query::{DeviceQuery, DeviceState};
+    use tauri::{Emitter, Manager, PhysicalPosition};
+    if let Some(win) = app.get_webview_window("popup") {
+        let (mx, my) = DeviceState::new().get_mouse().coords;
+        let _ = win.set_position(tauri::Position::Physical(PhysicalPosition::new(
+            (mx + 8).max(0),
+            (my + 8).max(0),
+        )));
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+    let _ = app.emit("autotext-choose", ids);
 }
 
 /// Rebuild the abbreviation index from the DB (call after phrase mutations).
