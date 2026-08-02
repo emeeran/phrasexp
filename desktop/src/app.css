@@ -24,6 +24,23 @@
   text-rendering: optimizeLegibility;
 }
 
+:root[data-theme="light"] {
+  --bg: #f4f5f7;
+  --bg-elev: #ffffff;
+  --bg-elev-2: #e8eaed;
+  --border: #d1d5db;
+  --border-soft: #e5e7eb;
+  --text: #1a1a2e;
+  --text-dim: #5b6470;
+  --text-faint: #9ca3af;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: rgba(37, 99, 235, 0.10);
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.10);
+  --ok: #16a34a;
+}
+
 * {
   box-sizing: border-box;
 }

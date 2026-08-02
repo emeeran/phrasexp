@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { getTheme, toggleTheme } from "$lib/theme";
   import PhraseEditor from "$lib/components/PhraseEditor.svelte";
   import Popup from "$lib/components/Popup.svelte";
   import SettingsPanel from "$lib/components/Settings.svelte";
@@ -37,6 +38,7 @@
   let showHistory = $state(false);
   let historyPhrase = $state<PhraseSummary | null>(null);
   let versions = $state<PhraseVersion[]>([]);
+  let theme = $state(getTheme());
 
   // expander
   let expanderType = $state<"autotext" | "hotkey">("autotext");
@@ -282,6 +284,9 @@
       <button class="ghost tiny" onclick={() => csvInput?.click()} title="Import phrases from CSV: abbreviation,text">⭱ Import</button>
       <input bind:this={csvInput} type="file" accept=".csv,text/csv" style="display:none" onchange={onCsvPicked} />
       <button class="ghost tiny" onclick={loadDupes} title="Find duplicate phrases">⧉ Dupes</button>
+      <button class="ghost tiny" title="Toggle light/dark theme" onclick={() => (theme = toggleTheme())}>
+        {theme === "dark" ? "☀" : "☾"}
+      </button>
       <button class="ghost tiny" title="Settings" onclick={() => (showSettings = true)}>⚙</button>
     </div>
   </div>
