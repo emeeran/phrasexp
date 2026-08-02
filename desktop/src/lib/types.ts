@@ -98,6 +98,7 @@ export interface Phrase {
   body: Segment[];
   triggers: TriggerBinding[];
   sensitive: boolean;
+  app_scope?: string | null;
   created_at: string;
   updated_at: string;
   deleted_at?: string | null;
@@ -155,6 +156,7 @@ export interface PhraseCreate {
   body: Segment[];
   triggers?: TriggerBinding[];
   sensitive?: boolean;
+  app_scope?: string | null;
 }
 export interface PhraseUpdate {
   name?: string;
@@ -163,6 +165,7 @@ export interface PhraseUpdate {
   body?: Segment[];
   triggers?: TriggerBinding[];
   sensitive?: boolean;
+  app_scope?: string | null;
 }
 export interface ExpandRequest {
   trigger: { type: TriggerType; abbreviation?: string; key?: string };

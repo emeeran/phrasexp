@@ -29,6 +29,7 @@
   let abbreviation = $state(src?.abbreviation ?? "");
   let hotkey = $state(src?.triggers.find((t) => t.type === "hotkey")?.key ?? "");
   let isRegex = $state(src?.triggers.find((t) => t.type === "autotext")?.regex ?? false);
+  let appScope = $state(src?.app_scope ?? "");
   let sensitive = $state(src?.sensitive ?? false);
   let segments: Segment[] = $state(
     src?.body ? structuredClone($state.snapshot(src.body)) : [{ type: "text", text: "" }],
@@ -87,6 +88,7 @@
             body,
             triggers,
             sensitive,
+            app_scope: appScope.trim() || null,
           })
         : await api.createPhrase({
             folderId,
@@ -95,6 +97,7 @@
             body,
             triggers,
             sensitive,
+            app_scope: appScope.trim() || null,
           });
       onsaved(saved);
     } catch (e) {
@@ -131,6 +134,11 @@
     <input type="checkbox" bind:checked={isRegex} style="width:auto" />
     <span class="muted">Regex abbreviation — triggers when the pattern matches the end of what you type (e.g. <code>:[a-z]+</code>)</span>
   </label>
+
+  <div class="field">
+    <label for="pe-app">App scope (optional)</label>
+    <input id="pe-app" bind:value={appScope} placeholder="e.g. Firefox — phrase only active when the focused window title contains this (blank = everywhere)" />
+  </div>
 
   <label class="row" style="gap:8px; cursor:pointer">
     <input type="checkbox" bind:checked={sensitive} style="width:auto" />

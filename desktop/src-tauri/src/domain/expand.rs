@@ -115,6 +115,7 @@ mod tests {
             body,
             triggers: vec![],
             sensitive: false,
+            app_scope: None,
             created_at: "2026-08-01T09:30:00Z".into(),
             updated_at: "2026-08-01T09:30:00Z".into(),
             deleted_at: None,

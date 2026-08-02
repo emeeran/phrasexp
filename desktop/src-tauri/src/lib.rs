@@ -27,6 +27,19 @@ pub struct AppState {
     pub clipboard_enabled: Arc<AtomicBool>,
     /// Registered per-phrase hotkeys: (shortcut, phrase_id).
     pub hotkey_registry: Arc<Mutex<Vec<(Shortcut, String)>>>,
+    /// Phase 2: title of the currently focused window (for app-scoped phrases).
+    pub current_app: Arc<Mutex<Option<String>>>,
+}
+
+/// Background poller keeping `current_app` fresh (Phase 2 app-scoping).
+fn start_app_poller(current: Arc<Mutex<Option<String>>>) {
+    std::thread::spawn(move || loop {
+        let title = triggers::app_context::current_window_title();
+        if let Ok(mut g) = current.lock() {
+            *g = title;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+    });
 }
 
 /// Summon the search popup near the cursor (M3 UX).
@@ -58,10 +71,25 @@ fn show_main(app: &tauri::AppHandle) {
 fn inject_phrase_by_id(app: &tauri::AppHandle, id: &str) {
     let state = app.state::<AppState>();
     if let Ok(Some(phrase)) = state.db.get_phrase(id) {
-        if phrase.deleted_at.is_none() {
-            if let Ok(output) = state.db.expand(&phrase, &std::collections::HashMap::new()) {
-                let _ = state.injector.type_text(&output);
-            }
+        if phrase.deleted_at.is_some() {
+            return;
+        }
+        // Phase 2: respect app scope.
+        let cur = state
+            .current_app
+            .lock()
+            .map(|g| g.clone())
+            .ok()
+            .flatten();
+        let active = phrase
+            .app_scope
+            .as_deref()
+            .is_none_or(|s| triggers::app_context::scope_active(s, &cur));
+        if !active {
+            return;
+        }
+        if let Ok(output) = state.db.expand(&phrase, &std::collections::HashMap::new()) {
+            let _ = state.injector.type_text(&output);
         }
     }
 }
@@ -202,11 +230,14 @@ pub fn run() {
             let phrases = db.list_phrases(None, None, false)?;
             let abbrev_index =
                 Arc::new(Mutex::new(triggers::AbbrevIndex::from_phrases(&phrases)));
+            let current_app = Arc::new(Mutex::new(None::<String>));
+            start_app_poller(Arc::clone(&current_app));
             let autotext = triggers::autotext::start(
                 Arc::clone(&db),
                 Arc::clone(&injector),
                 Arc::clone(&abbrev_index),
                 Arc::clone(&autotext_enabled),
+                Arc::clone(&current_app),
                 app.handle().clone(),
             );
 
@@ -222,6 +253,7 @@ pub fn run() {
                 autotext_events: autotext.events_seen,
                 clipboard_enabled,
                 hotkey_registry: Arc::new(Mutex::new(Vec::new())),
+                current_app,
             });
 
             // Phase 2: register the popup hotkey + all per-phrase hotkeys.

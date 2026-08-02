@@ -185,6 +185,9 @@ pub struct Phrase {
     pub triggers: Vec<TriggerBinding>,
     #[serde(default)]
     pub sensitive: bool,
+    /// Phase 2: if set, the phrase is only active when the focused window title contains this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_scope: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -251,6 +254,8 @@ pub struct PhraseCreate {
     pub triggers: Vec<TriggerBinding>,
     #[serde(default)]
     pub sensitive: bool,
+    #[serde(default)]
+    pub app_scope: Option<String>,
 }
 
 impl PhraseCreate {
@@ -290,6 +295,7 @@ pub struct PhraseUpdate {
     pub body: Option<Vec<Segment>>,
     pub triggers: Option<Vec<TriggerBinding>>,
     pub sensitive: Option<bool>,
+    pub app_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

@@ -195,6 +195,7 @@ pub fn start(
     injector: Arc<dyn Injector>,
     index: Arc<Mutex<AbbrevIndex>>,
     enabled: Arc<AtomicBool>,
+    current: Arc<Mutex<Option<String>>>,
     app: tauri::AppHandle,
 ) -> AutotextHandle {
     let events_seen = Arc::new(AtomicU64::new(0));
@@ -209,6 +210,7 @@ pub fn start(
     let inj = injector.clone();
     let inj_flag = injecting.clone();
     let app_h = app.clone();
+    let cur = current.clone();
 
     std::thread::spawn(move || {
         run.store(true, Ordering::Relaxed);
@@ -252,7 +254,7 @@ pub fn start(
                             let drop_n = buffer.len() - MAX_BUFFER;
                             buffer.drain(0..drop_n);
                         }
-                        maybe_expand(&mut buffer, &idx, &database, &inj, &inj_flag, &app_h);
+                        maybe_expand(&mut buffer, &idx, &database, &inj, &inj_flag, &cur, &app_h);
                     } else {
                         // Unmapped key: the buffer is no longer a reliable suffix.
                         buffer.clear();
@@ -287,6 +289,7 @@ fn maybe_expand(
     db: &Db,
     inj: &Arc<dyn Injector>,
     inj_flag: &Arc<AtomicBool>,
+    current: &Mutex<Option<String>>,
     app: &tauri::AppHandle,
 ) {
     let matched = idx
@@ -314,6 +317,13 @@ fn maybe_expand(
     };
     if phrase.deleted_at.is_some() || has_inputform(&phrase) {
         return; // inputform phrases need the popup; skip silent expansion.
+    }
+    // Phase 2: app scoping — only fire for this phrase if its app_scope matches the focused window.
+    if let Some(scope) = &phrase.app_scope {
+        let cur = current.lock().map(|g| g.clone()).ok().flatten();
+        if !crate::triggers::app_context::scope_active(scope, &cur) {
+            return; // wrong application focused
+        }
     }
     let Ok(output) = db.expand(&phrase, &HashMap::new()) else {
         return;
@@ -371,6 +381,7 @@ mod tests {
             body,
             triggers: vec![],
             sensitive: false,
+            app_scope: None,
             created_at: "t".into(),
             updated_at: "t".into(),
             deleted_at: None,

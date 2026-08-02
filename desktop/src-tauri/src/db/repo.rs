@@ -222,8 +222,8 @@ impl Db {
         conn.execute(
             "INSERT INTO phrases \
              (id, folder_id, name, abbreviation, content_type, body_json, triggers_json, \
-              sensitive, created_at, updated_at, deleted_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL)",
+              sensitive, app_scope, created_at, updated_at, deleted_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL)",
             params![
                 phrase.id,
                 phrase.folder_id,
@@ -233,6 +233,7 @@ impl Db {
                 body_json,
                 triggers_json,
                 phrase.sensitive as i64,
+                phrase.app_scope,
                 phrase.created_at,
                 phrase.updated_at,
             ],
@@ -246,7 +247,7 @@ impl Db {
         let row = conn
             .query_row(
                 "SELECT id, folder_id, name, abbreviation, content_type, body_json, \
-                        triggers_json, sensitive, created_at, updated_at, deleted_at \
+                        triggers_json, sensitive, app_scope, created_at, updated_at, deleted_at \
                  FROM phrases WHERE id = ?1",
                 params![id],
                 row_to_phrase,
@@ -267,7 +268,7 @@ impl Db {
         let mut stmt = conn
             .prepare(
                 "SELECT id, folder_id, name, abbreviation, content_type, body_json, \
-                        triggers_json, sensitive, created_at, updated_at, deleted_at FROM phrases",
+                        triggers_json, sensitive, app_scope, created_at, updated_at, deleted_at FROM phrases",
             )
             .map_err(db_err)?;
         let rows = stmt.query_map([], row_to_phrase).map_err(db_err)?;
@@ -322,7 +323,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE phrases SET name=?1, abbreviation=?2, content_type=?3, body_json=?4, \
-             triggers_json=?5, sensitive=?6, updated_at=?7 WHERE id=?8",
+             triggers_json=?5, sensitive=?6, app_scope=?7, updated_at=?8 WHERE id=?9",
             params![
                 phrase.name,
                 phrase.abbreviation,
@@ -330,6 +331,7 @@ impl Db {
                 body_json,
                 triggers_json,
                 phrase.sensitive as i64,
+                phrase.app_scope,
                 now_iso(),
                 phrase.id,
             ],
@@ -698,9 +700,10 @@ fn row_to_phrase(r: &rusqlite::Row) -> rusqlite::Result<Phrase> {
         body,
         triggers,
         sensitive: r.get::<_, i64>(7)? != 0,
-        created_at: r.get(8)?,
-        updated_at: r.get(9)?,
-        deleted_at: r.get(10)?,
+        app_scope: r.get(8)?,
+        created_at: r.get(9)?,
+        updated_at: r.get(10)?,
+        deleted_at: r.get(11)?,
     })
 }
 
@@ -708,7 +711,7 @@ fn get_phrase_inner(conn: &Connection, id: &str) -> DomainResult<Option<Phrase>>
     let row = conn
         .query_row(
             "SELECT id, folder_id, name, abbreviation, content_type, body_json, \
-                    triggers_json, sensitive, created_at, updated_at, deleted_at \
+                    triggers_json, sensitive, app_scope, created_at, updated_at, deleted_at \
              FROM phrases WHERE id = ?1",
             params![id],
             row_to_phrase,
@@ -773,6 +776,7 @@ mod tests {
             body,
             triggers: vec![],
             sensitive: false,
+            app_scope: None,
             created_at: now_iso(),
             updated_at: now_iso(),
             deleted_at: None,

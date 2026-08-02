@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS phrases (
     body_json     TEXT NOT NULL,        -- JSON array of segments
     triggers_json TEXT NOT NULL DEFAULT '[]',  -- JSON array of trigger bindings
     sensitive     INTEGER NOT NULL DEFAULT 0,
+    app_scope     TEXT,                 -- Phase 2: substring of focused window title; NULL = global
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     deleted_at    TEXT
