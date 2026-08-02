@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rdev::{listen, Event, EventType, Key};
+use tauri::Emitter;
 
 use crate::db::Db;
 use crate::domain::case_adapt;
@@ -428,8 +429,18 @@ fn maybe_expand(
             return; // wrong application focused
         }
     }
-    let Ok(output) = db.expand(&phrase, &HashMap::new()) else {
-        return;
+    let output = match db.expand(&phrase, &HashMap::new()) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("[phrasexp] expansion error: {e}");
+            let _ = app.emit("phrase-error", format!("{e}"));
+            // Erase the abbreviation so the user isn't left with it
+            inj_flag.store(true, Ordering::Relaxed);
+            let _ = inj.backspace(abbr.chars().count());
+            inj_flag.store(false, Ordering::Relaxed);
+            buffer.clear();
+            return;
+        }
     };
     let output = if case_adapt_flag.load(Ordering::Relaxed) {
         case_adapt(&output, &abbr)

@@ -4,6 +4,8 @@ A lightweight, local-first text expander. Type an abbreviation and it expands in
 press a hotkey to search all phrases; or use macros, Markdown, AI, and spellcheck to automate your
 typing. Everything runs locally on your machine — no cloud, no account.
 
+
+
 ---
 
 ## 1. Installation

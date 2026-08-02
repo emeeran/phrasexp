@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { listen } from "@tauri-apps/api/event";
   import { getTheme, toggleTheme } from "$lib/theme";
   import PhraseEditor from "$lib/components/PhraseEditor.svelte";
   import Popup from "$lib/components/Popup.svelte";
@@ -70,6 +71,10 @@
     } catch (e) {
       banner = errMsg(e);
     }
+    // Listen for expansion errors (e.g. AI failures) from the autotext listener.
+    listen<string>("phrase-error", (e) => {
+      banner = `⚠ ${e.payload}`;
+    });
   });
 
   // reload phrases whenever the folder filter, search, or sort changes
