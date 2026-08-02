@@ -96,35 +96,56 @@ impl AbbrevIndex {
         self.dict.len()
     }
 
-    /// Phase 5: find the nearest dictionary word to `word` (Damerau-Levenshtein).
-    /// Skips registered abbreviations and user ignore-list. Adaptive distance by word length.
+    /// Phase 5B: find the nearest dictionary word using BK-tree (fast for system dict)
+    /// plus linear scan for phrase dict. Frequency weighting: words from the user's
+    /// phrase bodies are preferred over system-dict-only words at the same distance.
     pub fn correct(&self, word: &str, ignore: &std::collections::HashSet<String>) -> Option<String> {
         let lower = word.to_lowercase();
-        // Already in dictionary → no correction needed.
         if self.dict.contains(&lower) {
             return None;
         }
-        // User ignore-list → never correct.
         if ignore.contains(&lower) {
             return None;
         }
-        // Abbreviation protection → don't correct registered trigger words.
         if self.literals.keys().any(|abbr| abbr.to_lowercase() == lower) {
             return None;
         }
-        // Adaptive distance: short words (≤4 chars) need distance 1; longer words allow 2.
         let max_dist = if lower.chars().count() <= 4 { 1 } else { 2 };
-        let mut best: Option<(usize, &str)> = None;
+
+        // Collect candidates: (distance, word, is_from_phrase_dict)
+        let mut candidates: Vec<(usize, String, bool)> = Vec::new();
+
+        // System dict: BK-tree search (fast — O(log n))
+        for (d, w) in system_bk_tree().search(&lower, max_dist) {
+            candidates.push((d, w, false));
+        }
+
+        // Phrase dict: linear scan (small — ~1.5K words)
+        let sys = system_dictionary();
         for entry in &self.dict {
+            if sys.contains(entry) {
+                continue; // already searched via BK-tree
+            }
             let d = damerau_levenshtein(&lower, entry);
             if d <= max_dist {
-                match best {
-                    Some((bd, _)) if bd <= d => {}
-                    _ => best = Some((d, entry)),
-                }
+                candidates.push((d, entry.clone(), true));
             }
         }
-        best.map(|(_, w)| w.to_string())
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // Sort: lowest distance first; at same distance, phrase-dict words first
+        // (frequency weighting — the user has used these); then shorter words; then alphabetical.
+        candidates.sort_by(|a, b| {
+            a.0.cmp(&b.0) // distance
+                .then(b.2.cmp(&a.2)) // phrase-dict first (true > false)
+                .then(a.1.len().cmp(&b.1.len())) // shorter preferred
+                .then(a.1.cmp(&b.1)) // alphabetical
+        });
+
+        Some(candidates[0].1.clone())
     }
 
     /// Longest literal suffix first, then regexes. Returns (text to erase, candidate ids).
@@ -229,6 +250,94 @@ fn system_dictionary() -> &'static std::collections::HashSet<String> {
             }
         }
         words
+    })
+}
+
+// --------------------------------------------------------------------------- //
+// BK-tree for O(log n) fuzzy spellcheck lookup (Phase B).
+// --------------------------------------------------------------------------- //
+struct BkNode {
+    word: String,
+    children: std::collections::HashMap<usize, BkNode>,
+}
+
+struct BkTree {
+    root: Option<BkNode>,
+}
+
+impl BkTree {
+    fn new() -> Self {
+        Self { root: None }
+    }
+
+    fn insert(&mut self, word: &str) {
+        if word.is_empty() {
+            return;
+        }
+        match &mut self.root {
+            None => {
+                self.root = Some(BkNode {
+                    word: word.to_string(),
+                    children: std::collections::HashMap::new(),
+                });
+            }
+            Some(root) => bk_insert(root, word),
+        }
+    }
+
+    /// Returns (distance, word) pairs within `max_dist` of `query`.
+    fn search(&self, query: &str, max_dist: usize) -> Vec<(usize, String)> {
+        let mut results = Vec::new();
+        if let Some(ref root) = self.root {
+            bk_search(root, query, max_dist, &mut results);
+        }
+        results
+    }
+}
+
+fn bk_insert(node: &mut BkNode, word: &str) {
+    let d = damerau_levenshtein(&node.word, word);
+    if d == 0 {
+        return; // duplicate
+    }
+    match node.children.get_mut(&d) {
+        Some(child) => bk_insert(child, word),
+        None => {
+            node.children.insert(
+                d,
+                BkNode {
+                    word: word.to_string(),
+                    children: std::collections::HashMap::new(),
+                },
+            );
+        }
+    }
+}
+
+fn bk_search(node: &BkNode, query: &str, max_dist: usize, results: &mut Vec<(usize, String)>) {
+    let d = damerau_levenshtein(&node.word, query);
+    if d <= max_dist {
+        results.push((d, node.word.clone()));
+    }
+    let lo = d.saturating_sub(max_dist).max(1);
+    let hi = d + max_dist;
+    for (dist, child) in &node.children {
+        if *dist >= lo && *dist <= hi {
+            bk_search(child, query, max_dist, results);
+        }
+    }
+}
+
+/// Lazily build a BK-tree from the system dictionary (once, cached forever).
+fn system_bk_tree() -> &'static BkTree {
+    use std::sync::OnceLock;
+    static TREE: OnceLock<BkTree> = OnceLock::new();
+    TREE.get_or_init(|| {
+        let mut tree = BkTree::new();
+        for word in system_dictionary() {
+            tree.insert(word);
+        }
+        tree
     })
 }
 
