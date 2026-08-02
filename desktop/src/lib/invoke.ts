@@ -14,6 +14,7 @@ import type {
   PhraseCreate,
   PhraseSummary,
   PhraseUpdate,
+  PhraseVersion,
   Settings,
   SortKey,
   TriggerType,
@@ -70,6 +71,11 @@ export const api = {
 
   // Phase 1: duplicate finder.
   findDuplicates: () => call<PhraseSummary[][]>("find_duplicates"),
+
+  // Phase 1: version history.
+  listVersions: (phraseId: string) => call<PhraseVersion[]>("list_versions", { phraseId }),
+  restoreVersion: (phraseId: string, versionId: string) =>
+    call<Phrase>("restore_version", { phraseId, versionId }),
 
   // M4: silent autotext listener status + toggle.
   autotextStatus: () => call<AutotextStatus>("autotext_status"),

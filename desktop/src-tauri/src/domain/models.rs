@@ -298,6 +298,17 @@ pub struct PhraseSummary {
     pub deleted: bool,
 }
 
+/// A snapshot of a phrase's body + triggers (Phase 1 version history).
+#[derive(Debug, Clone, Serialize)]
+pub struct PhraseVersion {
+    pub id: String,
+    pub phrase_id: String,
+    pub body: Vec<Segment>,
+    pub triggers: Vec<TriggerBinding>,
+    pub saved_at: String,
+    pub preview: String, // literal text preview, for the UI list
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ExpandResponse {
     pub phrase_id: String,

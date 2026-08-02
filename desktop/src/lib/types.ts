@@ -52,6 +52,16 @@ export interface LibraryExport {
   phrases: Phrase[];
 }
 
+/** A prior snapshot of a phrase (version history). */
+export interface PhraseVersion {
+  id: string;
+  phrase_id: string;
+  body: Segment[];
+  triggers: TriggerBinding[];
+  saved_at: string;
+  preview: string;
+}
+
 export interface TextSegment {
   type: "text";
   text: string;

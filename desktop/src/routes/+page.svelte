@@ -12,6 +12,7 @@
     Folder,
     Phrase,
     PhraseSummary,
+    PhraseVersion,
     SortKey,
   } from "$lib/types";
 
@@ -33,6 +34,9 @@
   let showSettings = $state(false);
   let showDupes = $state(false);
   let dupGroups = $state<PhraseSummary[][]>([]);
+  let showHistory = $state(false);
+  let historyPhrase = $state<PhraseSummary | null>(null);
+  let versions = $state<PhraseVersion[]>([]);
 
   // expander
   let expanderType = $state<"autotext" | "hotkey">("autotext");
@@ -223,6 +227,28 @@
       banner = errMsg(e);
     }
   }
+
+  async function loadHistory(p: PhraseSummary) {
+    try {
+      versions = await api.listVersions(p.id);
+      historyPhrase = p;
+      showHistory = true;
+    } catch (e) {
+      banner = errMsg(e);
+    }
+  }
+
+  async function doRestore(versionId: string) {
+    if (!historyPhrase) return;
+    try {
+      await api.restoreVersion(historyPhrase.id, versionId);
+      banner = "Restored previous version";
+      showHistory = false;
+      await refreshPhrases();
+    } catch (e) {
+      banner = errMsg(e);
+    }
+  }
 </script>
 
 {#if isPopup}
@@ -325,6 +351,7 @@
         <div class="preview muted">{p.content_preview}</div>
         <div class="row" style="justify-content:flex-end; margin-top:6px">
           <button class="tiny ghost" onclick={(e) => { e.stopPropagation(); copyPhrase(p); }}>Copy</button>
+          <button class="tiny ghost" onclick={(e) => { e.stopPropagation(); loadHistory(p); }}>History</button>
           <button class="tiny danger ghost" onclick={(e) => { e.stopPropagation(); removePhrase(p); }}>Delete</button>
         </div>
       </div>
@@ -407,6 +434,39 @@
           {#each group as p (p.id)}
             <div class="dup-item"><strong>{p.name}</strong> <span class="faint">— {p.content_preview}</span></div>
           {/each}
+        </div>
+      {/each}
+    </div>
+  </div>
+{/if}
+
+{#if showHistory}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <!-- svelte-ignore a11y_interactive_supports_focus -->
+  <div
+    class="modal-overlay"
+    role="presentation"
+    onclick={(e) => { if (e.target === e.currentTarget) showHistory = false; }}
+    onkeydown={(e) => e.key === "Escape" && (showHistory = false)}
+  >
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="row between">
+        <strong>History — {historyPhrase?.name}</strong>
+        <button class="ghost tiny" onclick={() => (showHistory = false)}>✕ close</button>
+      </div>
+      {#if versions.length === 0}
+        <div class="faint" style="margin-top:8px">No previous versions yet.</div>
+      {/if}
+      {#each versions as v (v.id)}
+        <div class="dup-group">
+          <div class="row between">
+            <span>
+              {#if v.preview}{v.preview}{:else}<span class="faint">(empty)</span>{/if}
+              <br /><span class="faint">{v.saved_at}</span>
+            </span>
+            <button class="tiny" onclick={() => doRestore(v.id)}>Restore</button>
+          </div>
         </div>
       {/each}
     </div>

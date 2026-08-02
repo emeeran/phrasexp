@@ -306,6 +306,27 @@ pub fn find_duplicates(state: State<'_, AppState>) -> Result<Vec<Vec<PhraseSumma
         .collect())
 }
 
+/// Version history for a phrase.
+#[tauri::command]
+pub fn list_versions(
+    phrase_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<PhraseVersion>, ApiError> {
+    Ok(state.db.list_versions(&phrase_id)?)
+}
+
+/// Restore a phrase to a prior version (snapshots the current state first).
+#[tauri::command]
+pub fn restore_version(
+    phrase_id: String,
+    version_id: String,
+    state: State<'_, AppState>,
+) -> Result<Phrase, ApiError> {
+    let p = state.db.restore_version(&phrase_id, &version_id)?;
+    let _ = crate::triggers::rebuild_index(&state.db, &state.abbrev_index);
+    Ok(p)
+}
+
 // -- Autotext (M4) --------------------------------------------------------- //
 #[derive(Debug, serde::Serialize)]
 pub struct AutotextStatus {

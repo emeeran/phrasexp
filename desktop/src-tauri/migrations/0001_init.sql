@@ -36,3 +36,12 @@ CREATE TABLE IF NOT EXISTS settings (
     clipboard_enabled  INTEGER NOT NULL DEFAULT 1,
     autostart          INTEGER NOT NULL DEFAULT 0
 );
+
+-- Phrase version history (Phase 1): snapshots of body+triggers prior to each update.
+CREATE TABLE IF NOT EXISTS phrase_versions (
+    id            TEXT PRIMARY KEY,
+    phrase_id     TEXT NOT NULL,
+    body_json     TEXT NOT NULL,
+    triggers_json TEXT NOT NULL,
+    saved_at      TEXT NOT NULL
+);

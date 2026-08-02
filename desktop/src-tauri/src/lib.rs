@@ -224,6 +224,8 @@ pub fn run() {
             commands::export_library,
             commands::import_csv,
             commands::find_duplicates,
+            commands::list_versions,
+            commands::restore_version,
             commands::autotext_status,
             commands::set_autotext,
             commands::get_settings,

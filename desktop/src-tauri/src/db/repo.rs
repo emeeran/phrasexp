@@ -9,8 +9,8 @@ use std::collections::HashMap;
 
 use crate::domain::error::{DomainError, DomainResult};
 use crate::domain::models::{
-    ClipboardEntry, ContentType, Folder, Macro, Phrase, PhraseSummary, Segment, Settings,
-    TriggerBinding, TriggerRequest, TriggerType,
+    ClipboardEntry, ContentType, Folder, Macro, Phrase, PhraseSummary, PhraseVersion, Segment,
+    Settings, TriggerBinding, TriggerRequest, TriggerType,
 };
 use crate::domain::{evaluate_macro, literal_preview};
 
@@ -42,6 +42,22 @@ fn first_text(p: &Phrase) -> Option<String> {
         }
     }
     None
+}
+
+/// Literal-text preview of a segment list (for version history list).
+fn segments_preview(segments: &[Segment]) -> String {
+    let mut text = String::new();
+    for seg in segments {
+        if let Segment::Text { text: t } = seg {
+            text.push_str(t);
+        }
+    }
+    if text.chars().count() > 60 {
+        let t: String = text.chars().take(60).collect();
+        format!("{}…", t.trim_end())
+    } else {
+        text
+    }
 }
 
 fn content_type_str(c: ContentType) -> &'static str {
@@ -319,6 +335,7 @@ impl Db {
             }
         }
         self.assert_abbreviation_unique(phrase)?;
+        self.snapshot_current(&phrase.id)?;
         let body_json = serde_json::to_string(&phrase.body)
             .map_err(|e| DomainError::Validation(format!("cannot serialize body: {e}")))?;
         let triggers_json = serde_json::to_string(&phrase.triggers)
@@ -518,6 +535,101 @@ impl Db {
             }
         }
         Ok(groups.into_values().filter(|g| g.len() > 1).collect())
+    }
+
+    // ----------------------------------------------------------------------- //
+    // Version history (Phase 1)
+    // ----------------------------------------------------------------------- //
+    /// Snapshot the current body+triggers of a phrase into phrase_versions.
+    fn snapshot_current(&self, phrase_id: &str) -> DomainResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let row: Option<(String, String)> = conn
+            .query_row(
+                "SELECT body_json, triggers_json FROM phrases WHERE id = ?1",
+                params![phrase_id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(db_err)?;
+        if let Some((body_json, triggers_json)) = row {
+            conn.execute(
+                "INSERT INTO phrase_versions (id, phrase_id, body_json, triggers_json, saved_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    uuid::Uuid::new_v4().to_string(),
+                    phrase_id,
+                    body_json,
+                    triggers_json,
+                    now_iso(),
+                ],
+            )
+            .map_err(db_err)?;
+        }
+        Ok(())
+    }
+
+    pub fn list_versions(&self, phrase_id: &str) -> DomainResult<Vec<PhraseVersion>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, phrase_id, body_json, triggers_json, saved_at FROM phrase_versions \
+                 WHERE phrase_id = ?1 ORDER BY saved_at DESC",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![phrase_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            })
+            .map_err(db_err)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, pid, body_json, triggers_json, saved_at) = row.map_err(db_err)?;
+            let body: Vec<Segment> = serde_json::from_str(&body_json).unwrap_or_default();
+            let triggers: Vec<TriggerBinding> =
+                serde_json::from_str(&triggers_json).unwrap_or_default();
+            out.push(PhraseVersion {
+                id,
+                phrase_id: pid,
+                preview: segments_preview(&body),
+                body,
+                triggers,
+                saved_at,
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn restore_version(&self, phrase_id: &str, version_id: &str) -> DomainResult<Phrase> {
+        let mut phrase = self
+            .get_phrase(phrase_id)?
+            .ok_or_else(|| DomainError::NotFound(format!("phrase {phrase_id} not found")))?;
+        let (body, triggers) = {
+            let conn = self.conn.lock().unwrap();
+            let row: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT body_json, triggers_json FROM phrase_versions \
+                     WHERE id = ?1 AND phrase_id = ?2",
+                    params![version_id, phrase_id],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                )
+                .optional()
+                .map_err(db_err)?;
+            let (bj, tj) = row
+                .ok_or_else(|| DomainError::NotFound("version not found".into()))?;
+            let body: Vec<Segment> = serde_json::from_str(&bj)
+                .map_err(|e| DomainError::Validation(format!("version body: {e}")))?;
+            let triggers: Vec<TriggerBinding> = serde_json::from_str(&tj).unwrap_or_default();
+            (body, triggers)
+        };
+        phrase.body = body;
+        phrase.triggers = triggers;
+        self.update_phrase(&phrase) // snapshots current (pre-restore) + applies
     }
 
     // ----------------------------------------------------------------------- //
@@ -836,6 +948,25 @@ mod tests {
         let groups = db.find_duplicates().unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].len(), 2);
+    }
+
+    #[test]
+    fn version_history_records_and_restores() {
+        let db = db();
+        let f = new_folder(&db, "Inbox");
+        let mut p = new_phrase(&db, &f.id, "P", vec![Segment::Text { text: "v1".into() }]);
+        // edit -> snapshots "v1", applies "v2"
+        p.body = vec![Segment::Text { text: "v2".into() }];
+        db.update_phrase(&p).unwrap();
+
+        let versions = db.list_versions(&p.id).unwrap();
+        assert_eq!(versions.len(), 1);
+        // restoring the snapshot brings back "v1"
+        let restored = db.restore_version(&p.id, &versions[0].id).unwrap();
+        match &restored.body[0] {
+            Segment::Text { text } => assert_eq!(text, "v1"),
+            _ => panic!("expected text segment"),
+        }
     }
 
     #[test]
