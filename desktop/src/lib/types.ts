@@ -48,6 +48,10 @@ export interface FileMacro {
   type: "file";
   path: string;
 }
+export interface AiMacro {
+  type: "ai";
+  prompt: string;
+}
 export type Macro =
   | DateTimeMacro
   | DateMathMacro
@@ -58,7 +62,8 @@ export type Macro =
   | NestedMacro
   | EnvMacro
   | PickMacro
-  | FileMacro;
+  | FileMacro
+  | AiMacro;
 
 export type SortKey = "name" | "updated" | "created";
 
@@ -156,6 +161,10 @@ export interface Settings {
   autotext_enabled: boolean;
   clipboard_enabled: boolean;
   autostart: boolean;
+  ai_enabled?: boolean;
+  ai_base_url?: string;
+  ai_api_key?: string;
+  ai_model?: string;
 }
 
 // Request DTOs

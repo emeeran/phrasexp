@@ -61,7 +61,9 @@
                       ? { type, options: ["yes", "no"] }
                       : type === "file"
                         ? { type, path: "" }
-                        : { type: "clipboard" };
+                        : type === "ai"
+                          ? { type, prompt: "Translate to French: " }
+                          : { type: "clipboard" };
     segments.push({ type: "macro", macro });
   }
   function removeAt(i: number) {
@@ -168,6 +170,7 @@
         <button class="tiny" onclick={() => addMacro("env")}>+ env</button>
         <button class="tiny" onclick={() => addMacro("pick")}>+ pick</button>
         <button class="tiny" onclick={() => addMacro("file")}>+ file</button>
+        <button class="tiny" onclick={() => addMacro("ai")}>+ ai</button>
       </div>
     </div>
     {#each segments as seg, i (i)}
@@ -280,6 +283,11 @@
           <div class="field">
             <span class="caption">file path (contents are inserted)</span>
             <input bind:value={seg.macro.path} placeholder="/path/to/file.txt" spellcheck="false" />
+          </div>
+        {:else if seg.macro.type === "ai"}
+          <div class="field">
+            <span class="caption">AI prompt (needs AI enabled + API key in Settings)</span>
+            <textarea bind:value={seg.macro.prompt} placeholder="Translate to French: Hello world"></textarea>
           </div>
         {/if}
       </div>

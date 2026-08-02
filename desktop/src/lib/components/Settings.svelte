@@ -55,6 +55,27 @@
       <span class="faint">e.g. Control+Alt+Space, Shift+Alt+P, Meta+Space · keys: a–z, 0–9, Space, F1–F12</span>
     </div>
 
+    <div class="divider" style="margin:10px 0; height:1px; background:var(--border-soft)"></div>
+
+    <label class="toggle">
+      <input type="checkbox" bind:checked={s.ai_enabled} />
+      <span>Enable AI macros <span class="faint">— OpenAI-compatible · bring your own key</span></span>
+    </label>
+    {#if s.ai_enabled}
+      <div class="field">
+        <label for="ai-url">API base URL</label>
+        <input id="ai-url" bind:value={s.ai_base_url} placeholder="https://api.openai.com/v1" />
+      </div>
+      <div class="field">
+        <label for="ai-key">API key <span class="faint">(stored locally in your phrase DB)</span></label>
+        <input id="ai-key" type="password" bind:value={s.ai_api_key} placeholder="sk-..." />
+      </div>
+      <div class="field">
+        <label for="ai-model">Model</label>
+        <input id="ai-model" bind:value={s.ai_model} placeholder="gpt-4o-mini" />
+      </div>
+    {/if}
+
     {#if error}<div class="error">{error}</div>{/if}
     <div class="row">
       <button class="primary" onclick={save} disabled={saving}>{saving ? "Saving…" : "Save settings"}</button>

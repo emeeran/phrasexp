@@ -55,6 +55,10 @@ pub fn evaluate_macro(
         Macro::Nested { .. } => Err(DomainError::Validation(
             "nested macro must be evaluated via Db::expand".into(),
         )),
+        // Ai needs settings + a network call — resolved in Db::expand.
+        Macro::Ai { .. } => Err(DomainError::Validation(
+            "ai macro must be evaluated via Db::expand".into(),
+        )),
     }
 }
 

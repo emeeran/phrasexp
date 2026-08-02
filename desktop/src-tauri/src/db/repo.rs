@@ -105,6 +105,15 @@ impl Db {
     fn run_migrations(&self) -> DomainResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(MIGRATION_SQL).map_err(db_err)?;
+        // Schema evolution: add AI settings columns if missing (ignore "duplicate column").
+        for stmt in [
+            "ALTER TABLE settings ADD COLUMN ai_enabled INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE settings ADD COLUMN ai_base_url TEXT NOT NULL DEFAULT 'https://api.openai.com/v1'",
+            "ALTER TABLE settings ADD COLUMN ai_api_key TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE settings ADD COLUMN ai_model TEXT NOT NULL DEFAULT 'gpt-4o-mini'",
+        ] {
+            let _ = conn.execute(stmt, []);
+        }
         Ok(())
     }
 
@@ -487,6 +496,10 @@ impl Db {
                 Segment::Text { text } => out.push_str(text),
                 Segment::Macro { macro_value } => match macro_value {
                     Macro::Clipboard => out.push_str(clip.unwrap_or("")),
+                    Macro::Ai { prompt } => {
+                        let settings = self.load_settings()?;
+                        out.push_str(&crate::triggers::ai::complete(&settings, prompt)?);
+                    }
                     Macro::Nested { phrase_id } => {
                         let linked = self.get_phrase(phrase_id)?.ok_or_else(|| {
                             DomainError::NotFound(format!("nested phrase {phrase_id} not found"))
@@ -620,7 +633,8 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let row = conn
             .query_row(
-                "SELECT popup_hotkey, autotext_enabled, clipboard_enabled, autostart \
+                "SELECT popup_hotkey, autotext_enabled, clipboard_enabled, autostart, \
+                        ai_enabled, ai_base_url, ai_api_key, ai_model \
                  FROM settings WHERE id = 1",
                 [],
                 |r| {
@@ -629,6 +643,10 @@ impl Db {
                         autotext_enabled: r.get::<_, i64>(1)? != 0,
                         clipboard_enabled: r.get::<_, i64>(2)? != 0,
                         autostart: r.get::<_, i64>(3)? != 0,
+                        ai_enabled: r.get::<_, i64>(4)? != 0,
+                        ai_base_url: r.get(5)?,
+                        ai_api_key: r.get(6)?,
+                        ai_model: r.get(7)?,
                     })
                 },
             )
@@ -639,13 +657,18 @@ impl Db {
             None => {
                 let s = Settings::defaults();
                 conn.execute(
-                    "INSERT INTO settings (id, popup_hotkey, autotext_enabled, clipboard_enabled, autostart) \
-                     VALUES (1, ?1, ?2, ?3, ?4)",
+                    "INSERT INTO settings (id, popup_hotkey, autotext_enabled, clipboard_enabled, \
+                     autostart, ai_enabled, ai_base_url, ai_api_key, ai_model) \
+                     VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![
                         s.popup_hotkey,
                         s.autotext_enabled as i64,
                         s.clipboard_enabled as i64,
-                        s.autostart as i64
+                        s.autostart as i64,
+                        s.ai_enabled as i64,
+                        s.ai_base_url,
+                        s.ai_api_key,
+                        s.ai_model
                     ],
                 )
                 .map_err(db_err)?;
@@ -657,18 +680,27 @@ impl Db {
     pub fn save_settings(&self, s: &Settings) -> DomainResult<Settings> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO settings (id, popup_hotkey, autotext_enabled, clipboard_enabled, autostart) \
-             VALUES (1, ?1, ?2, ?3, ?4) \
+            "INSERT INTO settings (id, popup_hotkey, autotext_enabled, clipboard_enabled, \
+             autostart, ai_enabled, ai_base_url, ai_api_key, ai_model) \
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
              ON CONFLICT(id) DO UPDATE SET \
                 popup_hotkey=excluded.popup_hotkey, \
                 autotext_enabled=excluded.autotext_enabled, \
                 clipboard_enabled=excluded.clipboard_enabled, \
-                autostart=excluded.autostart",
+                autostart=excluded.autostart, \
+                ai_enabled=excluded.ai_enabled, \
+                ai_base_url=excluded.ai_base_url, \
+                ai_api_key=excluded.ai_api_key, \
+                ai_model=excluded.ai_model",
             params![
                 s.popup_hotkey,
                 s.autotext_enabled as i64,
                 s.clipboard_enabled as i64,
-                s.autostart as i64
+                s.autostart as i64,
+                s.ai_enabled as i64,
+                s.ai_base_url,
+                s.ai_api_key,
+                s.ai_model
             ],
         )
         .map_err(db_err)?;

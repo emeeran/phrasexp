@@ -114,6 +114,10 @@ pub enum Macro {
     File {
         path: String,
     },
+    /// Phase 7: an AI-generated response to the given prompt (BYO key, OpenAI-compatible).
+    Ai {
+        prompt: String,
+    },
 }
 
 fn max_default() -> i64 {
@@ -376,6 +380,22 @@ pub struct Settings {
     pub clipboard_enabled: bool,
     #[serde(default)]
     pub autostart: bool,
+    // Phase 7: AI integration (BYO key, OpenAI-compatible endpoint).
+    #[serde(default)]
+    pub ai_enabled: bool,
+    #[serde(default = "default_ai_base_url")]
+    pub ai_base_url: String,
+    #[serde(default)]
+    pub ai_api_key: String,
+    #[serde(default = "default_ai_model")]
+    pub ai_model: String,
+}
+
+fn default_ai_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+fn default_ai_model() -> String {
+    "gpt-4o-mini".to_string()
 }
 
 impl Settings {
@@ -386,6 +406,10 @@ impl Settings {
             autotext_enabled: true,
             clipboard_enabled: true,
             autostart: false,
+            ai_enabled: false,
+            ai_base_url: default_ai_base_url(),
+            ai_api_key: String::new(),
+            ai_model: default_ai_model(),
         }
     }
 }

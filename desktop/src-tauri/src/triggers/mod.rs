@@ -1,5 +1,6 @@
 //! Trigger subsystem: hotkeys, autotext, clipboard capture, and input injection (ADR 0001).
 
+pub mod ai;
 pub mod app_context;
 pub mod autotext;
 pub mod clipboard;
