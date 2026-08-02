@@ -270,7 +270,7 @@ pub fn import_csv(
         }
         count += create_simple_phrase(&state, &folder_id, &abbr, &text)?;
     }
-    crate::triggers::rebuild_index(&state.db, &state.abbrev_index);
+    let _ = crate::triggers::rebuild_index(&state.db, &state.abbrev_index);
     Ok(count)
 }
 
