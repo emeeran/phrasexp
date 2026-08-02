@@ -205,6 +205,15 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
+                        // Spellcheck toggle shortcut: Control+Shift+S
+                        if let Some(sc_toggle) = parse_hotkey("Control+Shift+S") {
+                            if shortcut == &sc_toggle {
+                                let state = app.state::<AppState>();
+                                let new_val = !state.spellcheck_enabled.load(std::sync::atomic::Ordering::Relaxed);
+                                state.spellcheck_enabled.store(new_val, std::sync::atomic::Ordering::Relaxed);
+                                return;
+                            }
+                        }
                         // Per-phrase hotkey? -> inject that phrase directly. Else -> popup.
                         let phrase_id = app
                             .state::<AppState>()
@@ -298,6 +307,10 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 reregister_hotkeys(app.handle());
+                // Phase C: spellcheck toggle shortcut.
+                if let Some(sc) = parse_hotkey("Control+Shift+S") {
+                    let _ = app.global_shortcut().register(sc);
+                }
             }
 
             // M5: system tray (Show / Quit).
@@ -368,6 +381,7 @@ pub fn run() {
             commands::restore_version,
             commands::autotext_status,
             commands::set_autotext,
+            commands::toggle_spellcheck,
             commands::get_settings,
             commands::set_settings,
         ])

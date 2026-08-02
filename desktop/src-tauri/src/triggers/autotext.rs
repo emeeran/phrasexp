@@ -96,9 +96,10 @@ impl AbbrevIndex {
         self.dict.len()
     }
 
-    /// Phase 5B: find the nearest dictionary word using BK-tree (fast for system dict)
-    /// plus linear scan for phrase dict. Frequency weighting: words from the user's
-    /// phrase bodies are preferred over system-dict-only words at the same distance.
+    /// Phase 5B/5C: find the nearest dictionary word using BK-tree (fast for system dict)
+    /// plus linear scan for phrase dict. Falls back to Soundex phonetic matching.
+    /// Frequency weighting: words from the user's phrase bodies are preferred over
+    /// system-dict-only words at the same distance.
     pub fn correct(&self, word: &str, ignore: &std::collections::HashSet<String>) -> Option<String> {
         let lower = word.to_lowercase();
         if self.dict.contains(&lower) {
@@ -124,7 +125,7 @@ impl AbbrevIndex {
         let sys = system_dictionary();
         for entry in &self.dict {
             if sys.contains(entry) {
-                continue; // already searched via BK-tree
+                continue;
             }
             let d = damerau_levenshtein(&lower, entry);
             if d <= max_dist {
@@ -132,17 +133,37 @@ impl AbbrevIndex {
             }
         }
 
-        if candidates.is_empty() {
-            return None;
+        // Phase C: Soundex fallback — only for longer words (≥6 chars) where
+        // Damerau-Levenshtein ≤2 genuinely misses phonetic typos. Requires DL ≤3
+        // to avoid false matches on nonsense words.
+        if candidates.is_empty() && lower.chars().count() >= 6 {
+            let target_soundex = soundex(&lower);
+            if !target_soundex.is_empty() {
+                let mut best: Option<(usize, String, bool)> = None;
+                for entry in &self.dict {
+                    if soundex(entry) == target_soundex {
+                        let d = damerau_levenshtein(&lower, entry);
+                        if d <= 3 {
+                            let is_phrase = !sys.contains(entry);
+                            match &best {
+                                None => best = Some((d, entry.clone(), is_phrase)),
+                                Some((bd, _, bp)) if d < *bd || (d == *bd && is_phrase && !bp) => {
+                                    best = Some((d, entry.clone(), is_phrase));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                return best.map(|(_, w, _)| w);
+            }
         }
 
-        // Sort: lowest distance first; at same distance, phrase-dict words first
-        // (frequency weighting — the user has used these); then shorter words; then alphabetical.
         candidates.sort_by(|a, b| {
-            a.0.cmp(&b.0) // distance
-                .then(b.2.cmp(&a.2)) // phrase-dict first (true > false)
-                .then(a.1.len().cmp(&b.1.len())) // shorter preferred
-                .then(a.1.cmp(&b.1)) // alphabetical
+            a.0.cmp(&b.0)
+                .then(b.2.cmp(&a.2))
+                .then(a.1.len().cmp(&b.1.len()))
+                .then(a.1.cmp(&b.1))
         });
 
         Some(candidates[0].1.clone())
@@ -191,6 +212,48 @@ fn regex_suffix_match(re: &regex::Regex, buffer: &str) -> Option<String> {
         }
     }
     found
+}
+
+/// Phase C: Soundex phonetic code — catches "sounds like" typos that
+/// Damerau-Levenshtein misses (e.g. "definately" → "definitely").
+fn soundex(s: &str) -> String {
+    let chars: Vec<char> = s.chars().filter(|c| c.is_ascii_alphabetic()).collect();
+    if chars.is_empty() {
+        return String::new();
+    }
+    let mut result = String::with_capacity(4);
+    result.push(chars[0].to_ascii_uppercase());
+    let mut last_digit = soundex_digit(chars[0]);
+    for &c in &chars[1..] {
+        let d = soundex_digit(c);
+        if d != '0' && d != last_digit {
+            result.push(d);
+            if result.len() >= 4 {
+                break;
+            }
+        }
+        if d != '0' {
+            last_digit = d;
+        } else {
+            last_digit = '0';
+        }
+    }
+    while result.len() < 4 {
+        result.push('0');
+    }
+    result
+}
+
+fn soundex_digit(c: char) -> char {
+    match c.to_ascii_lowercase() {
+        'b' | 'f' | 'p' | 'v' => '1',
+        'c' | 'g' | 'j' | 'k' | 'q' | 's' | 'x' | 'z' => '2',
+        'd' | 't' => '3',
+        'l' => '4',
+        'm' | 'n' => '5',
+        'r' => '6',
+        _ => '0', // a, e, i, o, u, y, h, w
+    }
 }
 
 /// Phase 5: Damerau-Levenshtein distance — like Levenshtein but also detects adjacent
@@ -343,19 +406,21 @@ fn system_bk_tree() -> &'static BkTree {
 
 /// Phase 5: on a word boundary (space), check the last word against the dictionary
 /// and auto-correct if a close match is found.
+/// Returns Some(original_word) if a correction was applied, None otherwise.
 fn maybe_correct(
     buffer: &mut String,
     idx: &Mutex<AbbrevIndex>,
     inj: &dyn Injector,
     inj_flag: &Arc<AtomicBool>,
     ignore: &Mutex<std::collections::HashSet<String>>,
-) {
+) -> Option<String> {
     let trimmed = buffer.trim_end();
     let word_start = trimmed.rfind(' ').map(|i| i + 1).unwrap_or(0);
     let word = &trimmed[word_start..];
     if word.len() < 3 {
-        return;
+        return None;
     }
+    let original = word.to_string();
     let ignore_set = ignore.lock().ok();
     let empty = std::collections::HashSet::new();
     let correction = idx.lock().ok().and_then(|i| {
@@ -365,13 +430,14 @@ fn maybe_correct(
     if let Some(corrected) = correction {
         inj_flag.store(true, Ordering::Relaxed);
         let word_chars = word.chars().count();
-        let _ = inj.backspace(word_chars + 1); // erase "word "
+        let _ = inj.backspace(word_chars + 1);
         let _ = inj.type_text(&format!("{corrected} "));
         inj_flag.store(false, Ordering::Relaxed);
-        // Update the buffer to reflect the correction.
         let prefix = &buffer[..word_start.min(buffer.len())];
         *buffer = format!("{prefix}{corrected} ");
+        return Some(original);
     }
+    None
 }
 
 fn is_shift(k: Key) -> bool {
@@ -496,6 +562,8 @@ pub fn start(
         let mut buffer = String::new();
         let mut shifted = false;
         let mut modifier_active = false;
+        let mut last_correction: Option<String> = None;
+        let mut correction_undone = false;
 
         let callback = move |event: Event| {
             seen.fetch_add(1, Ordering::Relaxed);
@@ -521,6 +589,11 @@ pub fn start(
                     }
                     if key == Key::Backspace {
                         buffer.pop();
+                        // Phase C: learn from rejected corrections — if the user backspaces
+                        // immediately after a correction, they're undoing it.
+                        if last_correction.is_some() {
+                            correction_undone = true;
+                        }
                         return;
                     }
                     if clears_buffer(key) {
@@ -535,7 +608,27 @@ pub fn start(
                         }
                         maybe_expand(&mut buffer, &idx, &database, &*inj, &inj_flag, &ca, &cur, &app_h);
                         if ch == ' ' && !buffer.is_empty() && sc.load(Ordering::Relaxed) {
-                            maybe_correct(&mut buffer, &idx, &*inj, &inj_flag, &ig);
+                            let corrected = maybe_correct(&mut buffer, &idx, &*inj, &inj_flag, &ig);
+                            if let Some(orig) = corrected {
+                                last_correction = Some(orig);
+                                correction_undone = false;
+                            } else if correction_undone {
+                                // Phase C: user backspaced after a correction, then typed a new word.
+                                // If they re-typed the same misspelled word, learn to ignore it.
+                                let trimmed = buffer.trim_end();
+                                let ws = trimmed.rfind(' ').map(|i| i + 1).unwrap_or(0);
+                                let word = &trimmed[ws..];
+                                if let Some(ref lc) = last_correction {
+                                    if word.to_lowercase() == *lc {
+                                        if let Ok(mut guard) = ig.lock() {
+                                            guard.insert(lc.clone());
+                                        }
+                                        let _ = app_h.emit("spellcheck-learned", lc.clone());
+                                    }
+                                }
+                                last_correction = None;
+                                correction_undone = false;
+                            }
                         }
                     } else {
                         // Unmapped key: the buffer is no longer a reliable suffix.
@@ -838,8 +931,8 @@ mod tests {
         assert!(correction.is_some(), "teh should be corrected");
         // "the" is already in dict → no correction
         assert!(idx.correct("the", &empty_ignore).is_none());
-        // "xyzqq" has no close match → None
-        assert!(idx.correct("xyzqq", &empty_ignore).is_none());
+        // "zzqqxx" (6 chars) has no close or phonetic match → None
+        assert!(idx.correct("zzqqxx", &empty_ignore).is_none());
     }
 
     #[test]

@@ -494,6 +494,14 @@ pub fn set_autotext(enabled: bool, state: State<'_, AppState>) -> bool {
     enabled
 }
 
+#[tauri::command]
+pub fn toggle_spellcheck(state: State<'_, AppState>) -> bool {
+    let current = state.spellcheck_enabled.load(Ordering::Relaxed);
+    let new_val = !current;
+    state.spellcheck_enabled.store(new_val, Ordering::Relaxed);
+    new_val
+}
+
 // -- Settings (M5) --------------------------------------------------------- //
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, ApiError> {

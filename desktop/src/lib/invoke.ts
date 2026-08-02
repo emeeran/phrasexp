@@ -82,6 +82,7 @@ export const api = {
   // M4: silent autotext listener status + toggle.
   autotextStatus: () => call<AutotextStatus>("autotext_status"),
   setAutotext: (enabled: boolean) => call<boolean>("set_autotext", { enabled }),
+  toggleSpellcheck: () => call<boolean>("toggle_spellcheck"),
 
   // M5: app settings.
   getSettings: () => call<Settings>("get_settings"),

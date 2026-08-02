@@ -75,6 +75,10 @@
     listen<string>("phrase-error", (e) => {
       banner = `⚠ ${e.payload}`;
     });
+    // Phase C: spellcheck learned a word to ignore (user rejected a correction).
+    listen<string>("spellcheck-learned", (e) => {
+      banner = `📝 Spellcheck will now ignore "${e.payload}"`;
+    });
   });
 
   // reload phrases whenever the folder filter, search, or sort changes
