@@ -41,6 +41,10 @@ pub fn evaluate_macro(
         Macro::Clipboard => Err(DomainError::Validation(
             "clipboard macro must be evaluated via Db::expand".into(),
         )),
+        // Nested needs DB access to fetch the linked phrase — resolved in Db::expand.
+        Macro::Nested { .. } => Err(DomainError::Validation(
+            "nested macro must be evaluated via Db::expand".into(),
+        )),
     }
 }
 
@@ -73,27 +77,6 @@ pub fn case_adapt(text: &str, abbr: &str) -> String {
             None => String::new(),
         }
     }
-}
-
-/// FR-4/FR-10. Walk segments in order, concatenating literal text and evaluated macros.
-/// `clip` supplies the Clipboard-macro content (None when not available).
-pub fn expand_phrase(
-    phrase: &Phrase,
-    inputs: &HashMap<String, String>,
-    now: DateTime<Utc>,
-    clip: Option<&str>,
-) -> DomainResult<String> {
-    let mut out = String::new();
-    for seg in &phrase.body {
-        match seg {
-            Segment::Text { text } => out.push_str(text),
-            Segment::Macro { macro_value } => match macro_value {
-                Macro::Clipboard => out.push_str(clip.unwrap_or("")),
-                other => out.push_str(&evaluate_macro(other, inputs, now)?),
-            },
-        }
-    }
-    Ok(out)
 }
 
 /// FR-8. Non-delivery preview: literal text only, truncated.
@@ -172,41 +155,6 @@ mod tests {
         };
         let err = evaluate_macro(&m, &HashMap::new(), fixed_now());
         assert!(matches!(err, Err(DomainError::MissingInput(_))));
-    }
-
-    #[test]
-    fn expand_ordered_segments_with_input() {
-        let p = phrase_with(vec![
-            Segment::Text {
-                text: "Hello ".into(),
-            },
-            Segment::Macro {
-                macro_value: Macro::InputForm {
-                    field: "name".into(),
-                },
-            },
-            Segment::Text {
-                text: "!".into(),
-            },
-        ]);
-        let mut inputs = HashMap::new();
-        inputs.insert("name".into(), "Sam".into());
-        assert_eq!(expand_phrase(&p, &inputs, fixed_now(), None).unwrap(), "Hello Sam!");
-    }
-
-    #[test]
-    fn expand_is_deterministic() {
-        let p = phrase_with(vec![Segment::Macro {
-            macro_value: Macro::DateTime {
-                format: "%Y".into(),
-            },
-        }]);
-        let now = fixed_now();
-        assert_eq!(
-            expand_phrase(&p, &HashMap::new(), now, None).unwrap(),
-            expand_phrase(&p, &HashMap::new(), now, None).unwrap()
-        );
-        assert_eq!(expand_phrase(&p, &HashMap::new(), now, None).unwrap(), "2026");
     }
 
     #[test]

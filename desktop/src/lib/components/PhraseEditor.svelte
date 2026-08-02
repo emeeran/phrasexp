@@ -1,18 +1,23 @@
 <script lang="ts">
-  import type { Macro, Phrase, Segment, TriggerBinding } from "$lib/types";
+  import type { Macro, Phrase, PhraseSummary, Segment, TriggerBinding } from "$lib/types";
   import { api, errMsg } from "$lib/invoke";
 
   let {
     phrase = null,
     folderId,
+    phrases = [],
     onsaved,
     oncancel,
   }: {
     phrase?: Phrase | null;
     folderId: string;
+    phrases?: PhraseSummary[];
     onsaved: (p: Phrase) => void;
     oncancel: () => void;
   } = $props();
+
+  /** Phrases available to link (exclude self to avoid trivial self-recursion). */
+  const linkable = $derived(phrases.filter((p) => p.id !== phrase?.id));
 
   // svelte-ignore state_referenced_locally
   const isEdit = !!phrase;
@@ -46,7 +51,9 @@
               ? { type, min: 1, max: 100 }
               : type === "math"
                 ? { type, expr: "2+2" }
-                : { type: "clipboard" };
+                : type === "nested"
+                  ? { type, phrase_id: linkable[0]?.id ?? "" }
+                  : { type: "clipboard" };
     segments.push({ type: "macro", macro });
   }
   function removeAt(i: number) {
@@ -135,6 +142,9 @@
         <button class="tiny" onclick={() => addMacro("random")}>+ random</button>
         <button class="tiny" onclick={() => addMacro("math")}>+ math</button>
         <button class="tiny" onclick={() => addMacro("clipboard")}>+ clipboard</button>
+        <button class="tiny" onclick={() => addMacro("nested")} disabled={linkable.length === 0}>
+          + nested
+        </button>
       </div>
     </div>
     {#each segments as seg, i (i)}
@@ -189,6 +199,15 @@
         {:else if seg.macro.type === "clipboard"}
           <div class="field">
             <span class="caption">Inserts the current clipboard text when expanded.</span>
+          </div>
+        {:else if seg.macro.type === "nested"}
+          <div class="field">
+            <span class="caption">insert phrase (expands the linked phrase inline)</span>
+            <select bind:value={seg.macro.phrase_id}>
+              {#each linkable as pp (pp.id)}
+                <option value={pp.id}>{pp.name}</option>
+              {/each}
+            </select>
           </div>
         {/if}
       </div>

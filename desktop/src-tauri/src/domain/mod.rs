@@ -6,4 +6,4 @@ pub mod expand;
 pub mod models;
 
 pub use error::{ApiError, DomainError, DomainResult};
-pub use expand::{case_adapt, expand_phrase, literal_preview};
+pub use expand::{case_adapt, evaluate_macro, literal_preview};

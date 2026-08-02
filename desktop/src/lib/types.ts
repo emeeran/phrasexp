@@ -29,13 +29,18 @@ export interface MathMacro {
 export interface ClipboardMacro {
   type: "clipboard";
 }
+export interface NestedMacro {
+  type: "nested";
+  phrase_id: string;
+}
 export type Macro =
   | DateTimeMacro
   | DateMathMacro
   | InputFormMacro
   | RandomMacro
   | MathMacro
-  | ClipboardMacro;
+  | ClipboardMacro
+  | NestedMacro;
 
 export type SortKey = "name" | "updated" | "created";
 

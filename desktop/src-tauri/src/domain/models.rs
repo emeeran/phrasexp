@@ -84,6 +84,10 @@ pub enum Macro {
     },
     /// Insert the latest clipboard text.
     Clipboard,
+    /// Insert another phrase's expansion (linked/nested), by phrase id.
+    Nested {
+        phrase_id: String,
+    },
 }
 
 fn max_default() -> i64 {

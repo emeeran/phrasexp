@@ -9,10 +9,10 @@ use std::collections::HashMap;
 
 use crate::domain::error::{DomainError, DomainResult};
 use crate::domain::models::{
-    ClipboardEntry, ContentType, Folder, Phrase, PhraseSummary, Segment, Settings,
+    ClipboardEntry, ContentType, Folder, Macro, Phrase, PhraseSummary, Segment, Settings,
     TriggerBinding, TriggerRequest, TriggerType,
 };
-use crate::domain::{expand_phrase, literal_preview};
+use crate::domain::{evaluate_macro, literal_preview};
 
 pub const CLIPBOARD_CAPACITY: usize = 100; // FR-9 / P3 review O1
 
@@ -32,6 +32,16 @@ fn read_clipboard_text() -> Option<String> {
         .ok()
         .and_then(|mut c| c.get_text().ok())
         .filter(|s| !s.is_empty())
+}
+
+/// The first literal-text segment of a phrase (used for duplicate grouping).
+fn first_text(p: &Phrase) -> Option<String> {
+    for seg in &p.body {
+        if let Segment::Text { text } = seg {
+            return Some(text.clone());
+        }
+    }
+    None
 }
 
 fn content_type_str(c: ContentType) -> &'static str {
@@ -457,7 +467,57 @@ impl Db {
     ) -> DomainResult<String> {
         let now = chrono::Utc::now();
         let clip = read_clipboard_text();
-        expand_phrase(phrase, inputs, now, clip.as_deref())
+        self.expand_inner(phrase, inputs, now, clip.as_deref(), 0)
+    }
+
+    /// Recursive walk: handles Nested (linked phrases, depth-limited) and Clipboard;
+    /// delegates the pure macros to evaluate_macro.
+    fn expand_inner(
+        &self,
+        phrase: &Phrase,
+        inputs: &HashMap<String, String>,
+        now: chrono::DateTime<chrono::Utc>,
+        clip: Option<&str>,
+        depth: u8,
+    ) -> DomainResult<String> {
+        if depth > 8 {
+            return Err(DomainError::Validation("phrase nesting too deep".into()));
+        }
+        let mut out = String::new();
+        for seg in &phrase.body {
+            match seg {
+                Segment::Text { text } => out.push_str(text),
+                Segment::Macro { macro_value } => match macro_value {
+                    Macro::Clipboard => out.push_str(clip.unwrap_or("")),
+                    Macro::Nested { phrase_id } => {
+                        let linked = self.get_phrase(phrase_id)?.ok_or_else(|| {
+                            DomainError::NotFound(format!("nested phrase {phrase_id} not found"))
+                        })?;
+                        if linked.deleted_at.is_some() {
+                            return Err(DomainError::NotFound(format!(
+                                "nested phrase {phrase_id} is deleted"
+                            )));
+                        }
+                        out.push_str(&self.expand_inner(&linked, inputs, now, clip, depth + 1)?);
+                    }
+                    other => out.push_str(&evaluate_macro(other, inputs, now)?),
+                },
+            }
+        }
+        Ok(out)
+    }
+
+    /// Group active phrases whose first text segment is identical (duplicate content).
+    pub fn find_duplicates(&self) -> DomainResult<Vec<Vec<Phrase>>> {
+        let phrases = self.list_phrases(None, None, false)?;
+        let mut groups: std::collections::HashMap<String, Vec<Phrase>> =
+            std::collections::HashMap::new();
+        for p in phrases {
+            if let Some(key) = first_text(&p) {
+                groups.entry(key).or_default().push(p);
+            }
+        }
+        Ok(groups.into_values().filter(|g| g.len() > 1).collect())
     }
 
     // ----------------------------------------------------------------------- //
@@ -745,6 +805,37 @@ mod tests {
         let mut inputs = HashMap::new();
         inputs.insert("n".into(), "Sam".into());
         assert_eq!(db.expand(&phrase, &inputs).unwrap(), "Hello Sam");
+    }
+
+    #[test]
+    fn nested_phrase_expands_recursively() {
+        let db = db();
+        let f = new_folder(&db, "Inbox");
+        let inner = new_phrase(&db, &f.id, "Inner", vec![Segment::Text { text: "World".into() }]);
+        let outer = new_phrase(
+            &db,
+            &f.id,
+            "Outer",
+            vec![
+                Segment::Text { text: "Hello ".into() },
+                Segment::Macro {
+                    macro_value: Macro::Nested { phrase_id: inner.id.clone() },
+                },
+            ],
+        );
+        assert_eq!(db.expand(&outer, &HashMap::new()).unwrap(), "Hello World");
+    }
+
+    #[test]
+    fn find_duplicates_groups_identical_content() {
+        let db = db();
+        let f = new_folder(&db, "Inbox");
+        new_phrase(&db, &f.id, "A", vec![Segment::Text { text: "same text".into() }]);
+        new_phrase(&db, &f.id, "B", vec![Segment::Text { text: "same text".into() }]);
+        new_phrase(&db, &f.id, "C", vec![Segment::Text { text: "unique".into() }]);
+        let groups = db.find_duplicates().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 2);
     }
 
     #[test]

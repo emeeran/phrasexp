@@ -68,6 +68,9 @@ export const api = {
   importCsv: (csvText: string, folderId?: string | null) =>
     call<number>("import_csv", { csvText, folderId: folderId ?? null }),
 
+  // Phase 1: duplicate finder.
+  findDuplicates: () => call<PhraseSummary[][]>("find_duplicates"),
+
   // M4: silent autotext listener status + toggle.
   autotextStatus: () => call<AutotextStatus>("autotext_status"),
   setAutotext: (enabled: boolean) => call<boolean>("set_autotext", { enabled }),

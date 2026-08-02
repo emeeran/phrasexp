@@ -223,6 +223,7 @@ pub fn run() {
             commands::add_clipboard,
             commands::export_library,
             commands::import_csv,
+            commands::find_duplicates,
             commands::autotext_status,
             commands::set_autotext,
             commands::get_settings,

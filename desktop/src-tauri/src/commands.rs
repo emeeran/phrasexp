@@ -296,6 +296,16 @@ pub fn import_csv(
     Ok(count)
 }
 
+/// Find phrases with duplicate first-text content, grouped.
+#[tauri::command]
+pub fn find_duplicates(state: State<'_, AppState>) -> Result<Vec<Vec<PhraseSummary>>, ApiError> {
+    let groups = state.db.find_duplicates()?;
+    Ok(groups
+        .iter()
+        .map(|g| g.iter().map(|p| state.db.summary(p)).collect())
+        .collect())
+}
+
 // -- Autotext (M4) --------------------------------------------------------- //
 #[derive(Debug, serde::Serialize)]
 pub struct AutotextStatus {

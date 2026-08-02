@@ -31,6 +31,8 @@
   // editor
   let editing = $state<{ phrase: Phrase | null; folderId: string } | null>(null);
   let showSettings = $state(false);
+  let showDupes = $state(false);
+  let dupGroups = $state<PhraseSummary[][]>([]);
 
   // expander
   let expanderType = $state<"autotext" | "hotkey">("autotext");
@@ -212,6 +214,15 @@
     }
     input.value = "";
   }
+
+  async function loadDupes() {
+    try {
+      dupGroups = await api.findDuplicates();
+      showDupes = true;
+    } catch (e) {
+      banner = errMsg(e);
+    }
+  }
 </script>
 
 {#if isPopup}
@@ -235,6 +246,7 @@
       <button class="ghost tiny" onclick={exportLib} title="Export library as JSON">⭳ Export</button>
       <button class="ghost tiny" onclick={() => csvInput?.click()} title="Import phrases from CSV: abbreviation,text">⭱ Import</button>
       <input bind:this={csvInput} type="file" accept=".csv,text/csv" style="display:none" onchange={onCsvPicked} />
+      <button class="ghost tiny" onclick={loadDupes} title="Find duplicate phrases">⧉ Dupes</button>
       <button class="ghost tiny" title="Settings" onclick={() => (showSettings = true)}>⚙</button>
     </div>
   </div>
@@ -326,6 +338,7 @@
       <PhraseEditor
         phrase={editing.phrase}
         folderId={editing.folderId}
+        phrases={phrases}
         onsaved={onSaved}
         oncancel={() => (editing = null)}
       />
@@ -367,6 +380,35 @@
         <button class="ghost tiny" onclick={() => (showSettings = false)}>✕ close</button>
       </div>
       <SettingsPanel />
+    </div>
+  </div>
+{/if}
+
+{#if showDupes}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <!-- svelte-ignore a11y_interactive_supports_focus -->
+  <div
+    class="modal-overlay"
+    role="presentation"
+    onclick={(e) => { if (e.target === e.currentTarget) showDupes = false; }}
+    onkeydown={(e) => e.key === "Escape" && (showDupes = false)}
+  >
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="row between">
+        <strong>Duplicate phrases ({dupGroups.length} groups)</strong>
+        <button class="ghost tiny" onclick={() => (showDupes = false)}>✕ close</button>
+      </div>
+      {#if dupGroups.length === 0}
+        <div class="faint" style="margin-top:8px">No duplicates found.</div>
+      {/if}
+      {#each dupGroups as group, gi (gi)}
+        <div class="dup-group">
+          {#each group as p (p.id)}
+            <div class="dup-item"><strong>{p.name}</strong> <span class="faint">— {p.content_preview}</span></div>
+          {/each}
+        </div>
+      {/each}
     </div>
   </div>
 {/if}
@@ -469,5 +511,14 @@
     width: 520px;
     max-width: 90vw;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  }
+  .dup-group {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-soft);
+  }
+  .dup-item {
+    padding: 5px 0;
+    font-size: 13px;
   }
 </style>
