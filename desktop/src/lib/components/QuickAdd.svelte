@@ -39,7 +39,7 @@
         folderId = f.id;
       }
       await api.createPhrase({
-        folderId,
+        folder_id: folderId,
         name: text.length > 80 ? text.slice(0, 80) + "…" : text,
         abbreviation: a,
         body: [{ type: "text", text }],

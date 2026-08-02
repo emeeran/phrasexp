@@ -101,7 +101,7 @@
             content_type: contentType,
           })
         : await api.createPhrase({
-            folderId,
+            folder_id: folderId,
             name: name.trim(),
             abbreviation: abbreviation.trim() || null,
             body,
