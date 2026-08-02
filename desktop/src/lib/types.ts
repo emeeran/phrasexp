@@ -160,6 +160,8 @@ export interface Settings {
   popup_hotkey: string;
   autotext_enabled: boolean;
   clipboard_enabled: boolean;
+  spellcheck_enabled?: boolean;
+  case_adapt_enabled?: boolean;
   autostart: boolean;
   ai_enabled?: boolean;
   ai_base_url?: string;

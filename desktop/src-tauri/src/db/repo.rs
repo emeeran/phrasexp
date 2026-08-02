@@ -114,6 +114,8 @@ impl Db {
             "ALTER TABLE settings ADD COLUMN ai_api_key TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE settings ADD COLUMN ai_model TEXT NOT NULL DEFAULT 'gpt-4o-mini'",
             "ALTER TABLE phrases ADD COLUMN app_scope TEXT",
+            "ALTER TABLE settings ADD COLUMN spellcheck_enabled INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE settings ADD COLUMN case_adapt_enabled INTEGER NOT NULL DEFAULT 1",
         ] {
             let _ = conn.execute(stmt, []);
         }
@@ -508,7 +510,8 @@ impl Db {
                     Macro::Clipboard => out.push_str(clip.unwrap_or("")),
                     Macro::Ai { prompt } => {
                         let settings = self.load_settings()?;
-                        out.push_str(&crate::triggers::ai::complete(&settings, prompt)?);
+                        let resolved = prompt.replace("{clipboard}", clip.unwrap_or(""));
+                        out.push_str(&crate::triggers::ai::complete(&settings, &resolved)?);
                     }
                     Macro::Nested { phrase_id } => {
                         let linked = self.get_phrase(phrase_id)?.ok_or_else(|| {
@@ -644,7 +647,8 @@ impl Db {
         let row = conn
             .query_row(
                 "SELECT popup_hotkey, autotext_enabled, clipboard_enabled, autostart, \
-                        ai_enabled, ai_base_url, ai_api_key, ai_model \
+                        ai_enabled, ai_base_url, ai_api_key, ai_model, \
+                        spellcheck_enabled, case_adapt_enabled \
                  FROM settings WHERE id = 1",
                 [],
                 |r| {
@@ -657,6 +661,8 @@ impl Db {
                         ai_base_url: r.get(5)?,
                         ai_api_key: r.get(6)?,
                         ai_model: r.get(7)?,
+                        spellcheck_enabled: r.get::<_, i64>(8)? != 0,
+                        case_adapt_enabled: r.get::<_, i64>(9)? != 0,
                     })
                 },
             )
@@ -668,8 +674,9 @@ impl Db {
                 let s = Settings::defaults();
                 conn.execute(
                     "INSERT INTO settings (id, popup_hotkey, autotext_enabled, clipboard_enabled, \
-                     autostart, ai_enabled, ai_base_url, ai_api_key, ai_model) \
-                     VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     autostart, ai_enabled, ai_base_url, ai_api_key, ai_model, \
+                     spellcheck_enabled, case_adapt_enabled) \
+                     VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     params![
                         s.popup_hotkey,
                         s.autotext_enabled as i64,
@@ -678,7 +685,9 @@ impl Db {
                         s.ai_enabled as i64,
                         s.ai_base_url,
                         s.ai_api_key,
-                        s.ai_model
+                        s.ai_model,
+                        s.spellcheck_enabled as i64,
+                        s.case_adapt_enabled as i64
                     ],
                 )
                 .map_err(db_err)?;
@@ -691,8 +700,9 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO settings (id, popup_hotkey, autotext_enabled, clipboard_enabled, \
-             autostart, ai_enabled, ai_base_url, ai_api_key, ai_model) \
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+             autostart, ai_enabled, ai_base_url, ai_api_key, ai_model, \
+             spellcheck_enabled, case_adapt_enabled) \
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
              ON CONFLICT(id) DO UPDATE SET \
                 popup_hotkey=excluded.popup_hotkey, \
                 autotext_enabled=excluded.autotext_enabled, \
@@ -701,7 +711,9 @@ impl Db {
                 ai_enabled=excluded.ai_enabled, \
                 ai_base_url=excluded.ai_base_url, \
                 ai_api_key=excluded.ai_api_key, \
-                ai_model=excluded.ai_model",
+                ai_model=excluded.ai_model, \
+                spellcheck_enabled=excluded.spellcheck_enabled, \
+                case_adapt_enabled=excluded.case_adapt_enabled",
             params![
                 s.popup_hotkey,
                 s.autotext_enabled as i64,
@@ -710,7 +722,9 @@ impl Db {
                 s.ai_enabled as i64,
                 s.ai_base_url,
                 s.ai_api_key,
-                s.ai_model
+                s.ai_model,
+                s.spellcheck_enabled as i64,
+                s.case_adapt_enabled as i64
             ],
         )
         .map_err(db_err)?;

@@ -283,11 +283,14 @@ pub struct AutotextHandle {
 
 /// Spawn the global key listener. `enabled` is shared with the caller so toggling
 /// it (via settings) takes effect live. Blocks in its own thread via rdev::listen.
+#[allow(clippy::too_many_arguments)]
 pub fn start(
     db: Arc<Db>,
     injector: Arc<dyn Injector>,
     index: Arc<Mutex<AbbrevIndex>>,
     enabled: Arc<AtomicBool>,
+    spellcheck: Arc<AtomicBool>,
+    case_adapt: Arc<AtomicBool>,
     current: Arc<Mutex<Option<String>>>,
     app: tauri::AppHandle,
 ) -> AutotextHandle {
@@ -296,6 +299,8 @@ pub fn start(
     let injecting = Arc::new(AtomicBool::new(false));
 
     let en = enabled;
+    let sc = spellcheck;
+    let ca = case_adapt;
     let seen = events_seen.clone();
     let run = running.clone();
     let idx = index.clone();
@@ -347,8 +352,8 @@ pub fn start(
                             let drop_n = buffer.len() - MAX_BUFFER;
                             buffer.drain(0..drop_n);
                         }
-                        maybe_expand(&mut buffer, &idx, &database, &*inj, &inj_flag, &cur, &app_h);
-                        if ch == ' ' && !buffer.is_empty() {
+                        maybe_expand(&mut buffer, &idx, &database, &*inj, &inj_flag, &ca, &cur, &app_h);
+                        if ch == ' ' && !buffer.is_empty() && sc.load(Ordering::Relaxed) {
                             maybe_correct(&mut buffer, &idx, &*inj, &inj_flag);
                         }
                     } else {
@@ -385,6 +390,7 @@ fn maybe_expand(
     db: &Db,
     inj: &dyn Injector,
     inj_flag: &Arc<AtomicBool>,
+    case_adapt_flag: &AtomicBool,
     current: &Mutex<Option<String>>,
     app: &tauri::AppHandle,
 ) {
@@ -424,7 +430,11 @@ fn maybe_expand(
     let Ok(output) = db.expand(&phrase, &HashMap::new()) else {
         return;
     };
-    let output = case_adapt(&output, &abbr);
+    let output = if case_adapt_flag.load(Ordering::Relaxed) {
+        case_adapt(&output, &abbr)
+    } else {
+        output
+    };
 
     // Erase the typed abbreviation, then type the expansion. Guard against re-entry.
     inj_flag.store(true, Ordering::Relaxed);

@@ -190,8 +190,25 @@
           aria-label="Add segment"
           onchange={(e) => {
             const v = e.currentTarget.value;
-            if (v === "text") addText();
-            else if (v) addMacro(v as Macro["type"]);
+            if (v === "text") {
+              addText();
+            } else if (v.startsWith("ai-")) {
+              const presets: Record<string, string> = {
+                "ai-translate": "Translate to French:\n{clipboard}",
+                "ai-formal": "Rewrite in a formal, professional tone:\n{clipboard}",
+                "ai-casual": "Rewrite in a casual, friendly tone:\n{clipboard}",
+                "ai-shorten": "Shorten while keeping key points:\n{clipboard}",
+                "ai-expand": "Expand and elaborate on:\n{clipboard}",
+                "ai-grammar": "Fix grammar and spelling:\n{clipboard}",
+                "ai-summarize": "Summarize:\n{clipboard}",
+              };
+              segments.push({
+                type: "macro",
+                macro: { type: "ai", prompt: presets[v] || "Translate to French:\n{clipboard}" },
+              });
+            } else if (v) {
+              addMacro(v as Macro["type"]);
+            }
             e.currentTarget.value = "";
           }}
         >
@@ -207,7 +224,14 @@
           <option value="env">Environment variable</option>
           <option value="pick">Pick from list</option>
           <option value="file">File contents</option>
-          <option value="ai">AI prompt</option>
+          <option value="ai">AI: Custom prompt</option>
+          <option value="ai-translate">AI: Translate</option>
+          <option value="ai-formal">AI: Make formal</option>
+          <option value="ai-casual">AI: Make casual</option>
+          <option value="ai-shorten">AI: Shorten</option>
+          <option value="ai-expand">AI: Expand</option>
+          <option value="ai-grammar">AI: Fix grammar</option>
+          <option value="ai-summarize">AI: Summarize</option>
         </select>
       </div>
     </div>

@@ -382,6 +382,10 @@ pub struct Settings {
     pub autotext_enabled: bool,
     #[serde(default = "default_true")]
     pub clipboard_enabled: bool,
+    #[serde(default = "default_true")]
+    pub spellcheck_enabled: bool,
+    #[serde(default = "default_true")]
+    pub case_adapt_enabled: bool,
     #[serde(default)]
     pub autostart: bool,
     // Phase 7: AI integration (BYO key, OpenAI-compatible endpoint).
@@ -409,6 +413,8 @@ impl Settings {
             popup_hotkey: default_popup_hotkey(),
             autotext_enabled: true,
             clipboard_enabled: true,
+            spellcheck_enabled: true,
+            case_adapt_enabled: true,
             autostart: false,
             ai_enabled: false,
             ai_base_url: default_ai_base_url(),

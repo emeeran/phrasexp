@@ -22,6 +22,8 @@ pub struct AppState {
     pub injector: Arc<dyn triggers::Injector>,
     pub abbrev_index: Arc<Mutex<triggers::AbbrevIndex>>,
     pub autotext_enabled: Arc<AtomicBool>,
+    pub spellcheck_enabled: Arc<AtomicBool>,
+    pub case_adapt_enabled: Arc<AtomicBool>,
     pub autotext_running: Arc<AtomicBool>,
     pub autotext_events: Arc<AtomicU64>,
     pub clipboard_enabled: Arc<AtomicBool>,
@@ -242,6 +244,8 @@ pub fn run() {
             let settings = db.load_settings()?;
             let autotext_enabled = Arc::new(AtomicBool::new(settings.autotext_enabled));
             let clipboard_enabled = Arc::new(AtomicBool::new(settings.clipboard_enabled));
+            let spellcheck_enabled = Arc::new(AtomicBool::new(settings.spellcheck_enabled));
+            let case_adapt_enabled = Arc::new(AtomicBool::new(settings.case_adapt_enabled));
 
             let injector = triggers::make_injector();
 
@@ -256,6 +260,8 @@ pub fn run() {
                 Arc::clone(&injector),
                 Arc::clone(&abbrev_index),
                 Arc::clone(&autotext_enabled),
+                Arc::clone(&spellcheck_enabled),
+                Arc::clone(&case_adapt_enabled),
                 Arc::clone(&current_app),
                 app.handle().clone(),
             );
@@ -268,6 +274,8 @@ pub fn run() {
                 injector,
                 abbrev_index,
                 autotext_enabled,
+                spellcheck_enabled,
+                case_adapt_enabled,
                 autotext_running: autotext.running,
                 autotext_events: autotext.events_seen,
                 clipboard_enabled,

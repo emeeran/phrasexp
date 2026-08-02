@@ -45,6 +45,14 @@
       <span>Capture clipboard history <span class="faint">— auto-record text copies</span></span>
     </label>
     <label class="toggle">
+      <input type="checkbox" bind:checked={s.spellcheck_enabled} />
+      <span>Spellcheck <span class="faint">— auto-correct typos as you type</span></span>
+    </label>
+    <label class="toggle">
+      <input type="checkbox" bind:checked={s.case_adapt_enabled} />
+      <span>Case adaptation <span class="faint">— SIG → ALL CAPS, Sig → Title</span></span>
+    </label>
+    <label class="toggle">
       <input type="checkbox" bind:checked={s.autostart} />
       <span>Launch on system login</span>
     </label>
