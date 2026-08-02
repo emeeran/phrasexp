@@ -304,7 +304,7 @@
       {:else if activeTab === "about"}
         <div class="about">
           <h2 style="margin:0 0 4px">PhraseXp</h2>
-          <span class="faint">v0.1.0 · Tauri 2 + Rust + Svelte 5</span>
+          <span class="faint">v0.1.1 · Tauri 2 + Rust + Svelte 5</span>
           <p>Lightweight, local-first text expander. Type an abbreviation to expand it, summon a search popup with a global hotkey, or use macros, Markdown, AI, and spellcheck to automate your typing.</p>
           <div class="divider"></div>
           <p class="about-credit">Developed by <strong>Dawnstar</strong></p>
