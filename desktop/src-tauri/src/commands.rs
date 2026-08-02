@@ -513,6 +513,14 @@ pub fn set_settings(
     state.clipboard_enabled.store(saved.clipboard_enabled, Ordering::Relaxed);
     state.spellcheck_enabled.store(saved.spellcheck_enabled, Ordering::Relaxed);
     state.case_adapt_enabled.store(saved.case_adapt_enabled, Ordering::Relaxed);
+    if let Ok(mut guard) = state.spellcheck_ignore.lock() {
+        *guard = saved
+            .spellcheck_ignore
+            .split(',')
+            .map(|w| w.trim().to_lowercase())
+            .filter(|w| !w.is_empty())
+            .collect();
+    }
 
     // Phase 2: re-register popup + per-phrase hotkeys (cheap; covers popup-hotkey changes).
     crate::reregister_hotkeys(&app);

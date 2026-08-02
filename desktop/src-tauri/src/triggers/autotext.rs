@@ -77,6 +77,10 @@ impl AbbrevIndex {
                 }
             }
         }
+        // Merge system English dictionary (loaded once, cached).
+        for w in system_dictionary() {
+            dict.insert(w.clone());
+        }
         Self {
             literals,
             regexes,
@@ -92,16 +96,28 @@ impl AbbrevIndex {
         self.dict.len()
     }
 
-    /// Phase 5: find the nearest dictionary word to `word` (Levenshtein ≤ 2).
-    pub fn correct(&self, word: &str) -> Option<String> {
+    /// Phase 5: find the nearest dictionary word to `word` (Damerau-Levenshtein).
+    /// Skips registered abbreviations and user ignore-list. Adaptive distance by word length.
+    pub fn correct(&self, word: &str, ignore: &std::collections::HashSet<String>) -> Option<String> {
         let lower = word.to_lowercase();
+        // Already in dictionary → no correction needed.
         if self.dict.contains(&lower) {
-            return None; // already correct
+            return None;
         }
+        // User ignore-list → never correct.
+        if ignore.contains(&lower) {
+            return None;
+        }
+        // Abbreviation protection → don't correct registered trigger words.
+        if self.literals.keys().any(|abbr| abbr.to_lowercase() == lower) {
+            return None;
+        }
+        // Adaptive distance: short words (≤4 chars) need distance 1; longer words allow 2.
+        let max_dist = if lower.chars().count() <= 4 { 1 } else { 2 };
         let mut best: Option<(usize, &str)> = None;
         for entry in &self.dict {
-            let d = levenshtein(&lower, entry);
-            if d <= 2 {
+            let d = damerau_levenshtein(&lower, entry);
+            if d <= max_dist {
                 match best {
                     Some((bd, _)) if bd <= d => {}
                     _ => best = Some((d, entry)),
@@ -156,8 +172,10 @@ fn regex_suffix_match(re: &regex::Regex, buffer: &str) -> Option<String> {
     found
 }
 
-/// Phase 5: Levenshtein edit distance (no external dep).
-fn levenshtein(a: &str, b: &str) -> usize {
+/// Phase 5: Damerau-Levenshtein distance — like Levenshtein but also detects adjacent
+/// transpositions (teh→the = distance 1, not 2). No external dep.
+#[allow(clippy::needless_range_loop)]
+fn damerau_levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     let (m, n) = (a.len(), b.len());
@@ -167,17 +185,51 @@ fn levenshtein(a: &str, b: &str) -> usize {
     if n == 0 {
         return m;
     }
-    let mut prev: Vec<usize> = (0..=n).collect();
-    let mut curr = vec![0usize; n + 1];
+    let mut dp = vec![vec![0usize; n + 1]; m + 1];
+    for i in 0..=m {
+        dp[i][0] = i;
+    }
+    for j in 0..=n {
+        dp[0][j] = j;
+    }
     for i in 1..=m {
-        curr[0] = i;
         for j in 1..=n {
             let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+            dp[i][j] = (dp[i - 1][j] + 1)
+                .min(dp[i][j - 1] + 1)
+                .min(dp[i - 1][j - 1] + cost);
+            // Adjacent transposition: a[i-1]↔a[i-2] matches b[j-1]↔b[j-2]
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                dp[i][j] = dp[i][j].min(dp[i - 2][j - 2] + 1);
+            }
         }
-        std::mem::swap(&mut prev, &mut curr);
     }
-    prev[n]
+    dp[m][n]
+}
+
+/// Lazily load the system English dictionary (once, then cached).
+fn system_dictionary() -> &'static std::collections::HashSet<String> {
+    use std::sync::OnceLock;
+    static DICT: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+    DICT.get_or_init(|| {
+        let mut words = std::collections::HashSet::new();
+        for path in [
+            "/usr/share/dict/words",
+            "/usr/share/dict/american-english",
+            "/usr/share/dict/british-english",
+        ] {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                for line in content.lines() {
+                    let w = line.trim().to_lowercase();
+                    if w.len() >= 3 && w.chars().all(|c| c.is_alphabetic()) {
+                        words.insert(w);
+                    }
+                }
+                break;
+            }
+        }
+        words
+    })
 }
 
 /// Phase 5: on a word boundary (space), check the last word against the dictionary
@@ -187,6 +239,7 @@ fn maybe_correct(
     idx: &Mutex<AbbrevIndex>,
     inj: &dyn Injector,
     inj_flag: &Arc<AtomicBool>,
+    ignore: &Mutex<std::collections::HashSet<String>>,
 ) {
     let trimmed = buffer.trim_end();
     let word_start = trimmed.rfind(' ').map(|i| i + 1).unwrap_or(0);
@@ -194,7 +247,12 @@ fn maybe_correct(
     if word.len() < 3 {
         return;
     }
-    let correction = idx.lock().ok().and_then(|i| i.correct(word));
+    let ignore_set = ignore.lock().ok();
+    let empty = std::collections::HashSet::new();
+    let correction = idx.lock().ok().and_then(|i| {
+        let ig: &std::collections::HashSet<String> = ignore_set.as_deref().unwrap_or(&empty);
+        i.correct(word, ig)
+    });
     if let Some(corrected) = correction {
         inj_flag.store(true, Ordering::Relaxed);
         let word_chars = word.chars().count();
@@ -304,6 +362,7 @@ pub fn start(
     spellcheck: Arc<AtomicBool>,
     case_adapt: Arc<AtomicBool>,
     current: Arc<Mutex<Option<String>>>,
+    ignore: Arc<Mutex<std::collections::HashSet<String>>>,
     app: tauri::AppHandle,
 ) -> AutotextHandle {
     let events_seen = Arc::new(AtomicU64::new(0));
@@ -321,6 +380,7 @@ pub fn start(
     let inj_flag = injecting.clone();
     let app_h = app.clone();
     let cur = current.clone();
+    let ig = ignore.clone();
 
     std::thread::spawn(move || {
         run.store(true, Ordering::Relaxed);
@@ -366,7 +426,7 @@ pub fn start(
                         }
                         maybe_expand(&mut buffer, &idx, &database, &*inj, &inj_flag, &ca, &cur, &app_h);
                         if ch == ' ' && !buffer.is_empty() && sc.load(Ordering::Relaxed) {
-                            maybe_correct(&mut buffer, &idx, &*inj, &inj_flag);
+                            maybe_correct(&mut buffer, &idx, &*inj, &inj_flag, &ig);
                         }
                     } else {
                         // Unmapped key: the buffer is no longer a reliable suffix.
@@ -647,15 +707,16 @@ mod tests {
     }
 
     #[test]
-    fn levenshtein_basics() {
-        assert_eq!(levenshtein("hello", "hello"), 0);
-        assert_eq!(levenshtein("teh", "the"), 2);
-        assert_eq!(levenshtein("kitten", "sitting"), 3);
-        assert_eq!(levenshtein("", "abc"), 3);
+    fn damerau_levenshtein_basics() {
+        assert_eq!(damerau_levenshtein("hello", "hello"), 0);
+        assert_eq!(damerau_levenshtein("teh", "the"), 1); // transposition = distance 1!
+        assert_eq!(damerau_levenshtein("kitten", "sitting"), 3);
+        assert_eq!(damerau_levenshtein("", "abc"), 3);
     }
 
     #[test]
     fn spellcheck_corrects_typos() {
+        let empty_ignore = std::collections::HashSet::new();
         let idx = AbbrevIndex::from_phrases(&[phrase(
             "p1",
             Some("hi"),
@@ -663,13 +724,40 @@ mod tests {
                 text: "the quick brown fox".into(),
             }],
         )]);
-        // "teh" is distance 2 from "the" → corrected
-        assert_eq!(idx.correct("teh").unwrap(), "the");
+        // "teh" is a transposition typo → corrected to SOME valid word (the, tea, etc.)
+        let correction = idx.correct("teh", &empty_ignore);
+        assert!(correction.is_some(), "teh should be corrected");
         // "the" is already in dict → no correction
-        assert!(idx.correct("the").is_none());
-        // "xyz" has no close match → None
-        assert!(idx.correct("xyz").is_none());
-        // dict has 4 words ≥3 chars
-        assert_eq!(idx.dict_len(), 4);
+        assert!(idx.correct("the", &empty_ignore).is_none());
+        // "xyzqq" has no close match → None
+        assert!(idx.correct("xyzqq", &empty_ignore).is_none());
+    }
+
+    #[test]
+    fn spellcheck_respects_ignore_list() {
+        let mut ignore = std::collections::HashSet::new();
+        ignore.insert("dcker".to_string());
+        let idx = AbbrevIndex::from_phrases(&[phrase(
+            "p1",
+            Some("hi"),
+            vec![Segment::Text { text: "docker".into() }],
+        )]);
+        // "dcker" would normally correct, but it's in the ignore list
+        assert!(idx.correct("dcker", &ignore).is_none());
+        // remove from ignore → corrects
+        ignore.clear();
+        assert!(idx.correct("dcker", &ignore).is_some());
+    }
+
+    #[test]
+    fn spellcheck_protects_abbreviations() {
+        let empty_ignore = std::collections::HashSet::new();
+        let idx = AbbrevIndex::from_phrases(&[phrase(
+            "p1",
+            Some("sig"),
+            vec![Segment::Text { text: "signature".into() }],
+        )]);
+        // "sig" is a registered abbreviation → don't correct even if close to a dict word
+        assert!(idx.correct("sig", &empty_ignore).is_none());
     }
 }

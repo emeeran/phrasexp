@@ -162,6 +162,7 @@ export interface Settings {
   clipboard_enabled: boolean;
   spellcheck_enabled?: boolean;
   case_adapt_enabled?: boolean;
+  spellcheck_ignore?: string;
   autostart: boolean;
   ai_enabled?: boolean;
   ai_base_url?: string;

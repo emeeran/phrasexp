@@ -159,6 +159,12 @@
       <input type="checkbox" bind:checked={s.spellcheck_enabled} />
       <span>Spellcheck <span class="faint">— auto-correct typos</span></span>
     </label>
+    {#if s.spellcheck_enabled}
+      <div class="field">
+        <label for="sc-ignore">Ignore words <span class="faint">(comma-separated — never corrected)</span></label>
+        <input id="sc-ignore" bind:value={s.spellcheck_ignore} placeholder="docker, nginx, kubernetes, myname" />
+      </div>
+    {/if}
     <label class="toggle">
       <input type="checkbox" bind:checked={s.case_adapt_enabled} />
       <span>Case adaptation <span class="faint">— SIG → ALL CAPS</span></span>

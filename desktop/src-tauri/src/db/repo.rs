@@ -116,6 +116,7 @@ impl Db {
             "ALTER TABLE phrases ADD COLUMN app_scope TEXT",
             "ALTER TABLE settings ADD COLUMN spellcheck_enabled INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE settings ADD COLUMN case_adapt_enabled INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE settings ADD COLUMN spellcheck_ignore TEXT NOT NULL DEFAULT ''",
         ] {
             let _ = conn.execute(stmt, []);
         }
@@ -671,7 +672,7 @@ impl Db {
             .query_row(
                 "SELECT popup_hotkey, autotext_enabled, clipboard_enabled, autostart, \
                         ai_enabled, ai_base_url, ai_api_key, ai_model, \
-                        spellcheck_enabled, case_adapt_enabled \
+                        spellcheck_enabled, case_adapt_enabled, spellcheck_ignore \
                  FROM settings WHERE id = 1",
                 [],
                 |r| {
@@ -686,6 +687,7 @@ impl Db {
                         ai_model: r.get(7)?,
                         spellcheck_enabled: r.get::<_, i64>(8)? != 0,
                         case_adapt_enabled: r.get::<_, i64>(9)? != 0,
+                        spellcheck_ignore: r.get(10)?,
                     })
                 },
             )
@@ -698,8 +700,8 @@ impl Db {
                 conn.execute(
                     "INSERT INTO settings (id, popup_hotkey, autotext_enabled, clipboard_enabled, \
                      autostart, ai_enabled, ai_base_url, ai_api_key, ai_model, \
-                     spellcheck_enabled, case_adapt_enabled) \
-                     VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                     spellcheck_enabled, case_adapt_enabled, spellcheck_ignore) \
+                     VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                     params![
                         s.popup_hotkey,
                         s.autotext_enabled as i64,
@@ -710,7 +712,8 @@ impl Db {
                         s.ai_api_key,
                         s.ai_model,
                         s.spellcheck_enabled as i64,
-                        s.case_adapt_enabled as i64
+                        s.case_adapt_enabled as i64,
+                        s.spellcheck_ignore
                     ],
                 )
                 .map_err(db_err)?;
@@ -724,8 +727,8 @@ impl Db {
         conn.execute(
             "INSERT INTO settings (id, popup_hotkey, autotext_enabled, clipboard_enabled, \
              autostart, ai_enabled, ai_base_url, ai_api_key, ai_model, \
-             spellcheck_enabled, case_adapt_enabled) \
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
+             spellcheck_enabled, case_adapt_enabled, spellcheck_ignore) \
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
              ON CONFLICT(id) DO UPDATE SET \
                 popup_hotkey=excluded.popup_hotkey, \
                 autotext_enabled=excluded.autotext_enabled, \
@@ -736,7 +739,8 @@ impl Db {
                 ai_api_key=excluded.ai_api_key, \
                 ai_model=excluded.ai_model, \
                 spellcheck_enabled=excluded.spellcheck_enabled, \
-                case_adapt_enabled=excluded.case_adapt_enabled",
+                case_adapt_enabled=excluded.case_adapt_enabled, \
+                spellcheck_ignore=excluded.spellcheck_ignore",
             params![
                 s.popup_hotkey,
                 s.autotext_enabled as i64,
@@ -747,7 +751,8 @@ impl Db {
                 s.ai_api_key,
                 s.ai_model,
                 s.spellcheck_enabled as i64,
-                s.case_adapt_enabled as i64
+                s.case_adapt_enabled as i64,
+                s.spellcheck_ignore
             ],
         )
         .map_err(db_err)?;

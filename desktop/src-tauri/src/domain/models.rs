@@ -387,6 +387,8 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub case_adapt_enabled: bool,
     #[serde(default)]
+    pub spellcheck_ignore: String,
+    #[serde(default)]
     pub autostart: bool,
     // Phase 7: AI integration (BYO key, OpenAI-compatible endpoint).
     #[serde(default)]
@@ -415,6 +417,7 @@ impl Settings {
             clipboard_enabled: true,
             spellcheck_enabled: true,
             case_adapt_enabled: true,
+            spellcheck_ignore: String::new(),
             autostart: false,
             ai_enabled: false,
             ai_base_url: default_ai_base_url(),

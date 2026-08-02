@@ -24,6 +24,7 @@ pub struct AppState {
     pub autotext_enabled: Arc<AtomicBool>,
     pub spellcheck_enabled: Arc<AtomicBool>,
     pub case_adapt_enabled: Arc<AtomicBool>,
+    pub spellcheck_ignore: Arc<Mutex<std::collections::HashSet<String>>>,
     pub autotext_running: Arc<AtomicBool>,
     pub autotext_events: Arc<AtomicU64>,
     pub clipboard_enabled: Arc<AtomicBool>,
@@ -246,6 +247,14 @@ pub fn run() {
             let clipboard_enabled = Arc::new(AtomicBool::new(settings.clipboard_enabled));
             let spellcheck_enabled = Arc::new(AtomicBool::new(settings.spellcheck_enabled));
             let case_adapt_enabled = Arc::new(AtomicBool::new(settings.case_adapt_enabled));
+            let spellcheck_ignore = Arc::new(Mutex::new(
+                settings
+                    .spellcheck_ignore
+                    .split(',')
+                    .map(|w| w.trim().to_lowercase())
+                    .filter(|w| !w.is_empty())
+                    .collect(),
+            ));
 
             let injector = triggers::make_injector();
 
@@ -263,6 +272,7 @@ pub fn run() {
                 Arc::clone(&spellcheck_enabled),
                 Arc::clone(&case_adapt_enabled),
                 Arc::clone(&current_app),
+                Arc::clone(&spellcheck_ignore),
                 app.handle().clone(),
             );
 
@@ -276,6 +286,7 @@ pub fn run() {
                 autotext_enabled,
                 spellcheck_enabled,
                 case_adapt_enabled,
+                spellcheck_ignore,
                 autotext_running: autotext.running,
                 autotext_events: autotext.events_seen,
                 clipboard_enabled,
