@@ -161,6 +161,14 @@
     </label>
     {#if s.spellcheck_enabled}
       <div class="field">
+        <label for="sc-mode">Aggressiveness</label>
+        <select id="sc-mode" bind:value={s.spellcheck_mode}>
+          <option value="conservative">Conservative — distance 1 only (fewest false positives)</option>
+          <option value="normal">Normal — distance 2 + Soundex for long words</option>
+          <option value="aggressive">Aggressive — distance 3 + Soundex for all</option>
+        </select>
+      </div>
+      <div class="field">
         <label for="sc-ignore">Ignore words <span class="faint">(comma-separated — never corrected)</span></label>
         <input id="sc-ignore" bind:value={s.spellcheck_ignore} placeholder="docker, nginx, kubernetes, myname" />
       </div>

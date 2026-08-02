@@ -163,6 +163,7 @@ export interface Settings {
   spellcheck_enabled?: boolean;
   case_adapt_enabled?: boolean;
   spellcheck_ignore?: string;
+  spellcheck_mode?: string;
   autostart: boolean;
   ai_enabled?: boolean;
   ai_base_url?: string;

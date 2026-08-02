@@ -4,6 +4,7 @@ pub mod ai;
 pub mod app_context;
 pub mod autotext;
 pub mod clipboard;
+pub mod common_words;
 pub mod inject;
 
 pub use autotext::{rebuild as rebuild_index, AbbrevIndex};

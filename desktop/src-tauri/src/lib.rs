@@ -25,6 +25,7 @@ pub struct AppState {
     pub spellcheck_enabled: Arc<AtomicBool>,
     pub case_adapt_enabled: Arc<AtomicBool>,
     pub spellcheck_ignore: Arc<Mutex<std::collections::HashSet<String>>>,
+    pub spellcheck_mode: Arc<Mutex<String>>,
     pub autotext_running: Arc<AtomicBool>,
     pub autotext_events: Arc<AtomicU64>,
     pub clipboard_enabled: Arc<AtomicBool>,
@@ -264,6 +265,7 @@ pub fn run() {
                     .filter(|w| !w.is_empty())
                     .collect(),
             ));
+            let spellcheck_mode = Arc::new(Mutex::new(settings.spellcheck_mode.clone()));
 
             let injector = triggers::make_injector();
 
@@ -282,6 +284,7 @@ pub fn run() {
                 Arc::clone(&case_adapt_enabled),
                 Arc::clone(&current_app),
                 Arc::clone(&spellcheck_ignore),
+                Arc::clone(&spellcheck_mode),
                 app.handle().clone(),
             );
 
@@ -296,6 +299,7 @@ pub fn run() {
                 spellcheck_enabled,
                 case_adapt_enabled,
                 spellcheck_ignore,
+                spellcheck_mode,
                 autotext_running: autotext.running,
                 autotext_events: autotext.events_seen,
                 clipboard_enabled,

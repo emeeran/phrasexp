@@ -388,6 +388,9 @@ pub struct Settings {
     pub case_adapt_enabled: bool,
     #[serde(default)]
     pub spellcheck_ignore: String,
+    /// Phase 1: "conservative" (dist 1 only), "normal" (current), "aggressive" (dist 3 + Soundex all lengths).
+    #[serde(default = "default_spellcheck_mode")]
+    pub spellcheck_mode: String,
     #[serde(default)]
     pub autostart: bool,
     // Phase 7: AI integration (BYO key, OpenAI-compatible endpoint).
@@ -407,6 +410,9 @@ fn default_ai_base_url() -> String {
 fn default_ai_model() -> String {
     "llama-3.3-70b-versatile".to_string()
 }
+fn default_spellcheck_mode() -> String {
+    "normal".to_string()
+}
 
 impl Settings {
     /// Built-in defaults (used to seed the settings row on first run).
@@ -418,6 +424,7 @@ impl Settings {
             spellcheck_enabled: true,
             case_adapt_enabled: true,
             spellcheck_ignore: String::new(),
+            spellcheck_mode: default_spellcheck_mode(),
             autostart: false,
             ai_enabled: false,
             ai_base_url: default_ai_base_url(),

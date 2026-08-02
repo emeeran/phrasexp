@@ -96,11 +96,34 @@ impl AbbrevIndex {
         self.dict.len()
     }
 
-    /// Phase 5B/5C: find the nearest dictionary word using BK-tree (fast for system dict)
+    /// Wrapper that reads the aggressiveness mode and delegates to `correct_internal`.
+    pub fn correct_with_mode(
+        &self,
+        word: &str,
+        ignore: &std::collections::HashSet<String>,
+        mode: &str,
+    ) -> Option<String> {
+        let (max_dist_short, max_dist_long, soundex_min_len, soundex_max_dist) = match mode {
+            "conservative" => (1, 1, usize::MAX, 0), // dist 1 only, no Soundex
+            "aggressive" => (2, 3, 4, 4),            // dist 3 for long words, Soundex for ≥4 chars
+            _ => (1, 2, 6, 3),                       // normal (default)
+        };
+        self.correct_internal(word, ignore, max_dist_short, max_dist_long, soundex_min_len, soundex_max_dist)
+    }
+
+    /// Phase 5B/5C/Tier1: find the nearest dictionary word using BK-tree (fast for system dict)
     /// plus linear scan for phrase dict. Falls back to Soundex phonetic matching.
-    /// Frequency weighting: words from the user's phrase bodies are preferred over
-    /// system-dict-only words at the same distance.
-    pub fn correct(&self, word: &str, ignore: &std::collections::HashSet<String>) -> Option<String> {
+    /// Ranking: distance → phrase-dict → frequency rank → word length → alphabetical.
+    /// Case preservation: the correction's case is adapted to match the original word.
+    pub fn correct_internal(
+        &self,
+        word: &str,
+        ignore: &std::collections::HashSet<String>,
+        max_dist_short: usize,
+        max_dist_long: usize,
+        soundex_min_len: usize,
+        soundex_max_dist: usize,
+    ) -> Option<String> {
         let lower = word.to_lowercase();
         if self.dict.contains(&lower) {
             return None;
@@ -111,17 +134,15 @@ impl AbbrevIndex {
         if self.literals.keys().any(|abbr| abbr.to_lowercase() == lower) {
             return None;
         }
-        let max_dist = if lower.chars().count() <= 4 { 1 } else { 2 };
+        let word_len = lower.chars().count();
+        let max_dist = if word_len <= 4 { max_dist_short } else { max_dist_long };
 
-        // Collect candidates: (distance, word, is_from_phrase_dict)
         let mut candidates: Vec<(usize, String, bool)> = Vec::new();
 
-        // System dict: BK-tree search (fast — O(log n))
         for (d, w) in system_bk_tree().search(&lower, max_dist) {
             candidates.push((d, w, false));
         }
 
-        // Phrase dict: linear scan (small — ~1.5K words)
         let sys = system_dictionary();
         for entry in &self.dict {
             if sys.contains(entry) {
@@ -133,17 +154,14 @@ impl AbbrevIndex {
             }
         }
 
-        // Phase C: Soundex fallback — only for longer words (≥6 chars) where
-        // Damerau-Levenshtein ≤2 genuinely misses phonetic typos. Requires DL ≤3
-        // to avoid false matches on nonsense words.
-        if candidates.is_empty() && lower.chars().count() >= 6 {
+        if candidates.is_empty() && word_len >= soundex_min_len {
             let target_soundex = soundex(&lower);
             if !target_soundex.is_empty() {
                 let mut best: Option<(usize, String, bool)> = None;
                 for entry in &self.dict {
                     if soundex(entry) == target_soundex {
                         let d = damerau_levenshtein(&lower, entry);
-                        if d <= 3 {
+                        if d <= soundex_max_dist {
                             let is_phrase = !sys.contains(entry);
                             match &best {
                                 None => best = Some((d, entry.clone(), is_phrase)),
@@ -155,18 +173,30 @@ impl AbbrevIndex {
                         }
                     }
                 }
-                return best.map(|(_, w, _)| w);
+                if let Some((_, w, _)) = best {
+                    return Some(apply_case(word, &w));
+                }
             }
+            return None;
         }
 
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // Sort: distance → phrase-dict first → frequency rank (lower=better) → shorter → alphabetical
         candidates.sort_by(|a, b| {
             a.0.cmp(&b.0)
                 .then(b.2.cmp(&a.2))
+                .then(
+                    crate::triggers::common_words::freq_rank(&a.1)
+                        .cmp(&crate::triggers::common_words::freq_rank(&b.1)),
+                )
                 .then(a.1.len().cmp(&b.1.len()))
                 .then(a.1.cmp(&b.1))
         });
 
-        Some(candidates[0].1.clone())
+        Some(apply_case(word, &candidates[0].1))
     }
 
     /// Longest literal suffix first, then regexes. Returns (text to erase, candidate ids).
@@ -212,6 +242,26 @@ fn regex_suffix_match(re: &regex::Regex, buffer: &str) -> Option<String> {
         }
     }
     found
+}
+
+/// Tier 1: Apply the original word's case pattern to the correction.
+/// "Teh" → "The" (Title), "SIG" → "SIGN" (ALL CAPS), "helo" → "help" (lowercase).
+fn apply_case(original: &str, correction: &str) -> String {
+    let mut orig_chars = original.chars();
+    let first = orig_chars.next();
+    let rest_upper = orig_chars.all(|c| c.is_uppercase());
+    match first {
+        Some(f) if f.is_uppercase() && rest_upper => correction.to_uppercase(),
+        Some(f) if f.is_uppercase() => {
+            // Title case: first letter uppercase, rest lowercase
+            let mut c = correction.chars();
+            match c.next() {
+                Some(first_c) => first_c.to_uppercase().chain(c).collect(),
+                None => String::new(),
+            }
+        }
+        _ => correction.to_string(),
+    }
 }
 
 /// Phase C: Soundex phonetic code — catches "sounds like" typos that
@@ -413,6 +463,7 @@ fn maybe_correct(
     inj: &dyn Injector,
     inj_flag: &Arc<AtomicBool>,
     ignore: &Mutex<std::collections::HashSet<String>>,
+    mode: &Mutex<String>,
 ) -> Option<String> {
     let trimmed = buffer.trim_end();
     let word_start = trimmed.rfind(' ').map(|i| i + 1).unwrap_or(0);
@@ -423,9 +474,10 @@ fn maybe_correct(
     let original = word.to_string();
     let ignore_set = ignore.lock().ok();
     let empty = std::collections::HashSet::new();
+    let mode_str = mode.lock().ok().map(|m| m.clone()).unwrap_or_else(|| "normal".to_string());
     let correction = idx.lock().ok().and_then(|i| {
         let ig: &std::collections::HashSet<String> = ignore_set.as_deref().unwrap_or(&empty);
-        i.correct(word, ig)
+        i.correct_with_mode(word, ig, &mode_str)
     });
     if let Some(corrected) = correction {
         inj_flag.store(true, Ordering::Relaxed);
@@ -538,6 +590,7 @@ pub fn start(
     case_adapt: Arc<AtomicBool>,
     current: Arc<Mutex<Option<String>>>,
     ignore: Arc<Mutex<std::collections::HashSet<String>>>,
+    mode: Arc<Mutex<String>>,
     app: tauri::AppHandle,
 ) -> AutotextHandle {
     let events_seen = Arc::new(AtomicU64::new(0));
@@ -556,6 +609,7 @@ pub fn start(
     let app_h = app.clone();
     let cur = current.clone();
     let ig = ignore.clone();
+    let md = mode.clone();
 
     std::thread::spawn(move || {
         run.store(true, Ordering::Relaxed);
@@ -608,7 +662,7 @@ pub fn start(
                         }
                         maybe_expand(&mut buffer, &idx, &database, &*inj, &inj_flag, &ca, &cur, &app_h);
                         if ch == ' ' && !buffer.is_empty() && sc.load(Ordering::Relaxed) {
-                            let corrected = maybe_correct(&mut buffer, &idx, &*inj, &inj_flag, &ig);
+                            let corrected = maybe_correct(&mut buffer, &idx, &*inj, &inj_flag, &ig, &md);
                             if let Some(orig) = corrected {
                                 last_correction = Some(orig);
                                 correction_undone = false;
@@ -927,12 +981,12 @@ mod tests {
             }],
         )]);
         // "teh" is a transposition typo → corrected to SOME valid word (the, tea, etc.)
-        let correction = idx.correct("teh", &empty_ignore);
+        let correction = idx.correct_with_mode("teh", &empty_ignore, "normal");
         assert!(correction.is_some(), "teh should be corrected");
         // "the" is already in dict → no correction
-        assert!(idx.correct("the", &empty_ignore).is_none());
+        assert!(idx.correct_with_mode("the", &empty_ignore, "normal").is_none());
         // "zzqqxx" (6 chars) has no close or phonetic match → None
-        assert!(idx.correct("zzqqxx", &empty_ignore).is_none());
+        assert!(idx.correct_with_mode("zzqqxx", &empty_ignore, "normal").is_none());
     }
 
     #[test]
@@ -945,10 +999,10 @@ mod tests {
             vec![Segment::Text { text: "docker".into() }],
         )]);
         // "dcker" would normally correct, but it's in the ignore list
-        assert!(idx.correct("dcker", &ignore).is_none());
+        assert!(idx.correct_with_mode("dcker", &ignore, "normal").is_none());
         // remove from ignore → corrects
         ignore.clear();
-        assert!(idx.correct("dcker", &ignore).is_some());
+        assert!(idx.correct_with_mode("dcker", &ignore, "normal").is_some());
     }
 
     #[test]
@@ -960,6 +1014,6 @@ mod tests {
             vec![Segment::Text { text: "signature".into() }],
         )]);
         // "sig" is a registered abbreviation → don't correct even if close to a dict word
-        assert!(idx.correct("sig", &empty_ignore).is_none());
+        assert!(idx.correct_with_mode("sig", &empty_ignore, "normal").is_none());
     }
 }

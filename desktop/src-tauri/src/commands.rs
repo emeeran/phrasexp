@@ -529,6 +529,9 @@ pub fn set_settings(
             .filter(|w| !w.is_empty())
             .collect();
     }
+    if let Ok(mut guard) = state.spellcheck_mode.lock() {
+        *guard = saved.spellcheck_mode.clone();
+    }
 
     // Phase 2: re-register popup + per-phrase hotkeys (cheap; covers popup-hotkey changes).
     crate::reregister_hotkeys(&app);
