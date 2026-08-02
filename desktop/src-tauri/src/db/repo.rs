@@ -897,7 +897,11 @@ mod tests {
             vec![
                 Segment::Text { text: "Hello ".into() },
                 Segment::Macro {
-                    macro_value: Macro::InputForm { field: "n".into() },
+                    macro_value: Macro::InputForm {
+                        field: "n".into(),
+                        kind: Default::default(),
+                        options: vec![],
+                    },
                 },
             ],
         );

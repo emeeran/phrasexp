@@ -22,7 +22,7 @@ pub fn evaluate_macro(
             days_offset,
             format,
         } => Ok((now + Duration::days(*days_offset)).format(format).to_string()),
-        Macro::InputForm { field } => inputs
+        Macro::InputForm { field, .. } => inputs
             .get(field)
             .cloned()
             .ok_or_else(|| DomainError::MissingInput(field.clone())),
@@ -142,6 +142,8 @@ mod tests {
     fn inputform_uses_inputs() {
         let m = Macro::InputForm {
             field: "name".into(),
+            kind: Default::default(),
+            options: vec![],
         };
         let mut inputs = HashMap::new();
         inputs.insert("name".into(), "Sam".into());
@@ -152,6 +154,8 @@ mod tests {
     fn inputform_missing_errors() {
         let m = Macro::InputForm {
             field: "name".into(),
+            kind: Default::default(),
+            options: vec![],
         };
         let err = evaluate_macro(&m, &HashMap::new(), fixed_now());
         assert!(matches!(err, Err(DomainError::MissingInput(_))));

@@ -13,9 +13,12 @@ export interface DateMathMacro {
   days_offset?: number; // default 0
   format?: string; // default "%Y-%m-%d"
 }
+export type InputKind = "text" | "select" | "checkbox";
 export interface InputFormMacro {
   type: "inputform";
   field: string;
+  kind?: InputKind;
+  options?: string[];
 }
 export interface RandomMacro {
   type: "random";

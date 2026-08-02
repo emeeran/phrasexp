@@ -45,6 +45,16 @@ pub enum OutputMode {
     Copy,
 }
 
+/// Input-form field control type (Phase 1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InputKind {
+    #[default]
+    Text,
+    Select,
+    Checkbox,
+}
+
 // --------------------------------------------------------------------------- //
 // Macros — internally tagged on "type" (FR-5)
 // --------------------------------------------------------------------------- //
@@ -70,6 +80,10 @@ pub enum Macro {
     },
     InputForm {
         field: String,
+        #[serde(default)]
+        kind: InputKind,
+        #[serde(default)]
+        options: Vec<String>,
     },
     /// Uniform random integer in [min, max].
     Random {

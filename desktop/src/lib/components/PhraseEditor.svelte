@@ -42,7 +42,7 @@
   function addMacro(type: Macro["type"]) {
     const macro: Macro =
       type === "inputform"
-        ? { type, field: "name" }
+        ? { type, field: "name", kind: "text", options: [] }
         : type === "datemath"
           ? { type, days_offset: 0, format: "%Y-%m-%d" }
           : type === "datetime"
@@ -176,10 +176,36 @@
             </div>
           </div>
         {:else if seg.macro.type === "inputform"}
-          <div class="field">
-            <span class="caption">field name (matched against expand inputs)</span>
-            <input bind:value={seg.macro.field} />
+          <div class="row" style="gap:10px">
+            <div class="field" style="flex:1">
+              <span class="caption">field name (matched against expand inputs)</span>
+              <input bind:value={seg.macro.field} />
+            </div>
+            <div class="field" style="flex:0 0 120px">
+              <span class="caption">type</span>
+              <select
+                value={seg.macro.kind ?? "text"}
+                onchange={(e) => (seg.macro.kind = e.currentTarget.value as "text" | "select" | "checkbox")}
+              >
+                <option value="text">text</option>
+                <option value="select">select</option>
+                <option value="checkbox">checkbox</option>
+              </select>
+            </div>
           </div>
+          {#if (seg.macro.kind ?? "text") === "select"}
+            <div class="field">
+              <span class="caption">options (comma-separated)</span>
+              <input
+                value={(seg.macro.options ?? []).join(", ")}
+                oninput={(e) =>
+                  (seg.macro.options = e.currentTarget.value
+                    .split(",")
+                    .map((s) => s.trim())
+                    .filter(Boolean))}
+              />
+            </div>
+          {/if}
         {:else if seg.macro.type === "random"}
           <div class="row" style="gap:10px">
             <div class="field" style="flex:0 0 110px">
