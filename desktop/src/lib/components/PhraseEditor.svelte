@@ -1,16 +1,18 @@
 <script lang="ts">
-  import type { ContentType, Macro, Phrase, PhraseSummary, Segment, TriggerBinding } from "$lib/types";
+  import type { ContentType, Folder, Macro, Phrase, PhraseSummary, Segment, TriggerBinding } from "$lib/types";
   import { api, errMsg } from "$lib/invoke";
 
   let {
     phrase = null,
     folderId,
+    folders = [],
     phrases = [],
     onsaved,
     oncancel,
   }: {
     phrase?: Phrase | null;
     folderId: string;
+    folders?: Folder[];
     phrases?: PhraseSummary[];
     onsaved: (p: Phrase) => void;
     oncancel: () => void;
@@ -31,6 +33,7 @@
   let isRegex = $state(src?.triggers.find((t) => t.type === "autotext")?.regex ?? false);
   let appScope = $state(src?.app_scope ?? "");
   let contentType = $state<ContentType>(src?.content_type ?? "plain");
+  let editFolderId = $state(src?.folder_id ?? folderId);
   let sensitive = $state(src?.sensitive ?? false);
   let segments: Segment[] = $state(
     src?.body ? structuredClone($state.snapshot(src.body)) : [{ type: "text", text: "" }],
@@ -93,6 +96,7 @@
       const saved: Phrase = isEdit && phrase
         ? await api.updatePhrase(phrase.id, {
             name: name.trim(),
+            folder_id: editFolderId,
             abbreviation: abbreviation.trim() || null,
             body,
             triggers,
@@ -101,7 +105,7 @@
             content_type: contentType,
           })
         : await api.createPhrase({
-            folder_id: folderId,
+            folder_id: editFolderId,
             name: name.trim(),
             abbreviation: abbreviation.trim() || null,
             body,
@@ -130,19 +134,26 @@
     <input id="pe-name" bind:value={name} placeholder="Signature" />
   </div>
 
-  <div class="field">
-    <label for="pe-ct">Content type</label>
-    <select
-      id="pe-ct"
-      value={contentType}
-      onchange={(e) => (contentType = e.currentTarget.value as ContentType)}
-    >
-      <option value="plain">Plain text (typed)</option>
-      <option value="markdown">Markdown (pasted as formatted HTML)</option>
-    </select>
-    {#if contentType === "markdown"}
-      <span class="faint">Markdown phrases paste as formatted HTML where the target supports rich paste; plain-text fallback otherwise. Body segments are Markdown source.</span>
-    {/if}
+  <div class="row" style="gap:10px">
+    <div class="field" style="flex:1">
+      <label for="pe-folder">Folder</label>
+      <select id="pe-folder" bind:value={editFolderId}>
+        {#each folders as f (f.id)}
+          <option value={f.id}>{f.name}</option>
+        {/each}
+      </select>
+    </div>
+    <div class="field" style="flex:1">
+      <label for="pe-ct">Content type</label>
+      <select
+        id="pe-ct"
+        value={contentType}
+        onchange={(e) => (contentType = e.currentTarget.value as ContentType)}
+      >
+        <option value="plain">Plain text (typed)</option>
+        <option value="markdown">Markdown (pasted as formatted HTML)</option>
+      </select>
+    </div>
   </div>
 
   <div class="row" style="gap:10px">
@@ -174,21 +185,30 @@
   <div class="col" style="gap:8px">
     <div class="row between">
       <strong>Body</strong>
-      <div class="row">
-        <button class="tiny" onclick={addText}>+ text</button>
-        <button class="tiny" onclick={() => addMacro("datetime")}>+ datetime</button>
-        <button class="tiny" onclick={() => addMacro("datemath")}>+ datemath</button>
-        <button class="tiny" onclick={() => addMacro("inputform")}>+ input</button>
-        <button class="tiny" onclick={() => addMacro("random")}>+ random</button>
-        <button class="tiny" onclick={() => addMacro("math")}>+ math</button>
-        <button class="tiny" onclick={() => addMacro("clipboard")}>+ clipboard</button>
-        <button class="tiny" onclick={() => addMacro("nested")} disabled={linkable.length === 0}>
-          + nested
-        </button>
-        <button class="tiny" onclick={() => addMacro("env")}>+ env</button>
-        <button class="tiny" onclick={() => addMacro("pick")}>+ pick</button>
-        <button class="tiny" onclick={() => addMacro("file")}>+ file</button>
-        <button class="tiny" onclick={() => addMacro("ai")}>+ ai</button>
+      <div class="row" style="gap:6px">
+        <select
+          aria-label="Add segment"
+          onchange={(e) => {
+            const v = e.currentTarget.value;
+            if (v === "text") addText();
+            else if (v) addMacro(v as Macro["type"]);
+            e.currentTarget.value = "";
+          }}
+        >
+          <option value="">+ Add segment…</option>
+          <option value="text">Text</option>
+          <option value="datetime">Date/time</option>
+          <option value="datemath">Date math</option>
+          <option value="inputform">Input form</option>
+          <option value="random">Random number</option>
+          <option value="math">Math</option>
+          <option value="clipboard">Clipboard</option>
+          <option value="nested" disabled={linkable.length === 0}>Nested phrase</option>
+          <option value="env">Environment variable</option>
+          <option value="pick">Pick from list</option>
+          <option value="file">File contents</option>
+          <option value="ai">AI prompt</option>
+        </select>
       </div>
     </div>
     {#each segments as seg, i (i)}

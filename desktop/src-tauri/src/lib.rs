@@ -339,6 +339,7 @@ pub fn run() {
             commands::clear_clipboard,
             commands::export_library,
             commands::import_csv,
+            commands::import_ahk,
             commands::find_duplicates,
             commands::list_versions,
             commands::restore_version,

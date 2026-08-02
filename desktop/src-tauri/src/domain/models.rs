@@ -309,6 +309,7 @@ impl PhraseCreate {
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct PhraseUpdate {
     pub name: Option<String>,
+    pub folder_id: Option<String>,
     pub abbreviation: Option<String>,
     pub content_type: Option<ContentType>,
     pub body: Option<Vec<Segment>>,

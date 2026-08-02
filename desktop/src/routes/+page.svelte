@@ -187,6 +187,7 @@
   }
 
   let csvInput: HTMLInputElement | undefined = $state();
+  let ahkInput: HTMLInputElement | undefined = $state();
 
   async function copyPhrase(p: PhraseSummary) {
     try {
@@ -223,6 +224,21 @@
     try {
       const n = await api.importCsv(text, selectedFolderId);
       banner = `Imported ${n} phrase${n === 1 ? "" : "s"}`;
+      await Promise.all([refreshFolders(), refreshPhrases()]);
+    } catch (err) {
+      banner = errMsg(err);
+    }
+    input.value = "";
+  }
+
+  async function onAhkPicked(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    try {
+      const n = await api.importAhk(text, selectedFolderId);
+      banner = `Imported ${n} phrase${n === 1 ? "" : "s"} from AHK`;
       await Promise.all([refreshFolders(), refreshPhrases()]);
     } catch (err) {
       banner = errMsg(err);
@@ -281,8 +297,10 @@
         </span>
       {/if}
       <button class="ghost tiny" onclick={exportLib} title="Export library as JSON">⭳ Export</button>
-      <button class="ghost tiny" onclick={() => csvInput?.click()} title="Import phrases from CSV: abbreviation,text">⭱ Import</button>
+      <button class="ghost tiny" onclick={() => csvInput?.click()} title="Import phrases from CSV: abbreviation,text">⭱ CSV</button>
       <input bind:this={csvInput} type="file" accept=".csv,text/csv" style="display:none" onchange={onCsvPicked} />
+      <button class="ghost tiny" onclick={() => ahkInput?.click()} title="Import AutoHotKey hotstrings (::trigger::replacement)">⭱ AHK</button>
+      <input bind:this={ahkInput} type="file" accept=".ahk,.txt,text/plain" style="display:none" onchange={onAhkPicked} />
       <button class="ghost tiny" onclick={loadDupes} title="Find duplicate phrases">⧉ Dupes</button>
       <button class="ghost tiny" title="Toggle light/dark theme" onclick={() => (theme = toggleTheme())}>
         {theme === "dark" ? "☀" : "☾"}
@@ -384,6 +402,7 @@
       <PhraseEditor
         phrase={editing.phrase}
         folderId={editing.folderId}
+        folders={folders}
         phrases={phrases}
         onsaved={onSaved}
         oncancel={() => (editing = null)}
@@ -551,15 +570,15 @@
     background: var(--bg-elev);
     border: 1px solid var(--border-soft);
     border-radius: var(--radius-sm);
-    padding: 10px 12px;
-    margin-bottom: 8px;
+    padding: 6px 10px;
+    margin-bottom: 4px;
   }
   .phrase:hover {
     border-color: var(--accent);
   }
   .preview {
-    margin-top: 4px;
-    font-size: 13px;
+    margin-top: 2px;
+    font-size: 12px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

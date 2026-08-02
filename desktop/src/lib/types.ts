@@ -184,6 +184,7 @@ export interface PhraseCreate {
 }
 export interface PhraseUpdate {
   name?: string;
+  folder_id?: string | null;
   abbreviation?: string | null;
   content_type?: ContentType;
   body?: Segment[];

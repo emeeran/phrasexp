@@ -252,18 +252,7 @@ pub fn import_csv(
     folder_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<u32, ApiError> {
-    let folder_id = match folder_id {
-        Some(f) => f,
-        None => {
-            let f = Folder {
-                id: Uuid::new_v4().to_string(),
-                name: "Imported".into(),
-                parent_id: None,
-                created_at: now_iso(),
-            };
-            state.db.create_folder(&f)?.id
-        }
-    };
+    let folder_id = resolve_folder(&state, folder_id)?;
 
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(false)
@@ -279,41 +268,110 @@ pub fn import_csv(
         if abbr.is_empty() && text.is_empty() {
             continue;
         }
-        let triggers = if abbr.is_empty() {
-            Vec::new()
-        } else {
-            vec![TriggerBinding {
-                kind: TriggerType::Autotext,
-                abbreviation: Some(abbr.clone()),
-                key: None,
-                regex: false,
-            }]
-        };
-        let name: String = if text.is_empty() {
-            abbr.clone()
-        } else {
-            text.chars().take(80).collect()
-        };
-        let phrase = Phrase {
-            id: Uuid::new_v4().to_string(),
-            folder_id: folder_id.clone(),
-            name,
-            abbreviation: if abbr.is_empty() { None } else { Some(abbr) },
-            content_type: ContentType::Plain,
-            body: vec![Segment::Text { text }],
-            triggers,
-            sensitive: false,
-            app_scope: None,
-            created_at: now_iso(),
-            updated_at: now_iso(),
-            deleted_at: None,
-        };
-        if state.db.create_phrase(&phrase).is_ok() {
-            count += 1;
+        count += create_simple_phrase(&state, &folder_id, &abbr, &text)?;
+    }
+    crate::triggers::rebuild_index(&state.db, &state.abbrev_index);
+    Ok(count)
+}
+
+/// Import AutoHotKey hotstrings (::trigger::replacement format).
+/// Skips exclusion hotstrings (no replacement), directives, and comments.
+#[tauri::command]
+pub fn import_ahk(
+    ahk_text: String,
+    folder_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<u32, ApiError> {
+    let folder_id = resolve_folder(&state, folder_id)?;
+
+    let mut count = 0u32;
+    for line in ahk_text.lines() {
+        let line = line.trim();
+        // Skip directives, comments, blank lines.
+        if line.starts_with('#') || line.starts_with(';') || line.is_empty() {
+            continue;
         }
+        // Match ::trigger::replacement
+        let Some(rest) = line.strip_prefix("::") else {
+            continue;
+        };
+        let Some(idx) = rest.find("::") else {
+            continue;
+        };
+        let abbr = rest[..idx].trim();
+        let replacement_raw = &rest[idx + 2..];
+        // Strip inline AHK comments (double-space + semicolon).
+        let replacement = replacement_raw
+            .split("  ;")
+            .next()
+            .unwrap_or(replacement_raw)
+            .trim();
+        if abbr.is_empty() || replacement.is_empty() {
+            continue;
+        }
+        count += create_simple_phrase(&state, &folder_id, abbr, replacement)?;
     }
     let _ = crate::triggers::rebuild_index(&state.db, &state.abbrev_index);
     Ok(count)
+}
+
+/// Resolve or create a folder for imports.
+fn resolve_folder(state: &State<'_, AppState>, folder_id: Option<String>) -> Result<String, ApiError> {
+    Ok(match folder_id {
+        Some(f) => f,
+        None => state
+            .db
+            .create_folder(&Folder {
+                id: Uuid::new_v4().to_string(),
+                name: "Imported".into(),
+                parent_id: None,
+                created_at: now_iso(),
+            })?
+            .id,
+    })
+}
+
+/// Create a phrase with a single text segment + autotext trigger. Returns 1 on success, 0 on skip.
+fn create_simple_phrase(
+    state: &State<'_, AppState>,
+    folder_id: &str,
+    abbr: &str,
+    text: &str,
+) -> Result<u32, ApiError> {
+    let triggers = if abbr.is_empty() {
+        Vec::new()
+    } else {
+        vec![TriggerBinding {
+            kind: TriggerType::Autotext,
+            abbreviation: Some(abbr.to_string()),
+            key: None,
+            regex: false,
+        }]
+    };
+    let name: String = if text.is_empty() {
+        abbr.to_string()
+    } else {
+        text.chars().take(80).collect()
+    };
+    let phrase = Phrase {
+        id: Uuid::new_v4().to_string(),
+        folder_id: folder_id.to_string(),
+        name,
+        abbreviation: if abbr.is_empty() { None } else { Some(abbr.to_string()) },
+        content_type: ContentType::Plain,
+        body: vec![Segment::Text { text: text.to_string() }],
+        triggers,
+        sensitive: false,
+        app_scope: None,
+        created_at: now_iso(),
+        updated_at: now_iso(),
+        deleted_at: None,
+    };
+    if state.db.create_phrase(&phrase).is_ok() {
+        Ok(1)
+    } else {
+        Ok(0)
+    }
 }
 
 /// Find phrases with duplicate first-text content, grouped.
@@ -432,7 +490,7 @@ fn apply_update(existing: Phrase, u: PhraseUpdate) -> DomainResult<Phrase> {
     }
     Ok(Phrase {
         id: existing.id,
-        folder_id: existing.folder_id,
+        folder_id: u.folder_id.unwrap_or(existing.folder_id),
         name: u.name.unwrap_or(existing.name),
         abbreviation,
         content_type,

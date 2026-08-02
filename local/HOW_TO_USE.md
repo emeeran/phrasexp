@@ -78,7 +78,7 @@ Click **+ New phrase** (or click any existing phrase to edit it). The editor ope
 
 Click **Save** when done.
 
----
+--
 
 ## 4. Triggering Phrases
 
@@ -96,7 +96,7 @@ Example: type `br,` → it becomes `Best regards, Meeran`.
 > **Tip**: use a prefix (`/`, `;`, or `:`) so the trigger only fires when you mean it. Without a
 > prefix, `sig` would also fire inside "signature".
 
-### Hotkey → Popup (Ctrl+Alt+Space)
+### Hotkey → Popup (Ctrl+Alt+Space) 
 Press **Ctrl+Alt+Space** anywhere → a search popup appears near your cursor:
 - Type to filter phrases.
 - **↑/↓** to navigate.

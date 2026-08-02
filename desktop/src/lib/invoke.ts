@@ -68,6 +68,8 @@ export const api = {
   exportLibrary: () => call<LibraryExport>("export_library"),
   importCsv: (csvText: string, folderId?: string | null) =>
     call<number>("import_csv", { csvText, folderId: folderId ?? null }),
+  importAhk: (ahkText: string, folderId?: string | null) =>
+    call<number>("import_ahk", { ahkText, folderId: folderId ?? null }),
 
   // Phase 1: duplicate finder.
   findDuplicates: () => call<PhraseSummary[][]>("find_duplicates"),
