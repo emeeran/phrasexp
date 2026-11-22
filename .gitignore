@@ -1,0 +1,9 @@
+# Python-generated files
+__pycache__/
+build/
+dist/
+local/
+releases/
+
+# Virtual environments
+.venv

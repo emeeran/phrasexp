@@ -1,0 +1,49 @@
+# Android IME spike CI: builds the Rust core (.so, arm64 + x86_64) and the
+# keyboard APK. GitHub's ubuntu runners ship the Android SDK, so this is also
+# the only build verification for machines without one.
+name: android
+
+on:
+  push:
+    branches: [main]
+    paths: ["core/**", "android/**", "scripts/build-android-core.sh", ".github/workflows/android.yml"]
+  pull_request:
+    paths: ["core/**", "android/**", "scripts/build-android-core.sh", ".github/workflows/android.yml"]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Host tests for the portable core
+        working-directory: core
+        run: cargo test
+
+      - name: Build core .so for Android ABIs
+        run: |
+          cargo install cargo-ndk --locked
+          scripts/build-android-core.sh
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # ubuntu runners ship a licensed Android SDK with ANDROID_HOME preset —
+      # no setup-android step (its sdkmanager run dies on the license prompt).
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK
+        working-directory: android
+        run: gradle assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phrasexp-keyboard-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk

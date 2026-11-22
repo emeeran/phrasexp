@@ -1,0 +1,11 @@
+[package]
+name = "phrasexp-core"
+version = "0.1.0"
+edition = "2021"
+description = "Portable PhraseXp engine — shared by the desktop app and the Android IME (P0 spike: JNI plumbing only)"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"

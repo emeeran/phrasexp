@@ -1,0 +1,106 @@
+# Tag-driven release: builds bundles for all three OSes and drafts a GitHub
+# release with the artifacts. Signing is env-driven: add the repo secrets named
+# below and the same workflow produces signed, notarized bundles; with no
+# secrets the builds are unsigned (Gatekeeper/SmartScreen will warn — see
+# RELEASING.md).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            args: --bundles deb,appimage
+          - os: windows-latest
+            args: --bundles msi,nsis
+          - os: macos-latest
+            args: --bundles app,dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Tauri system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      # tauri-action runs beforeBuildCommand (npm run build), which needs node_modules.
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      # tauri-bundler signs when APPLE_CERTIFICATE/APPLE_SIGNING_IDENTITY is *set*,
+      # even if empty — and empty makes `security import` fail on macOS. So the
+      # signing env vars are only passed when the secrets actually exist.
+      - name: Resolve signing availability
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ] || [ -n "$APPLE_SIGNING_IDENTITY" ] || [ -n "$CSC_LINK" ]; then
+            echo "SIGNING_SECRETS=true" >> "$GITHUB_ENV"
+          else
+            echo "SIGNING_SECRETS=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build and draft release (unsigned)
+        if: env.SIGNING_SECRETS == 'false'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # Required by tauri-action to create the draft release and upload artifacts.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "PhraseXp ${{ github.ref_name }}"
+          releaseDraft: true
+          args: ${{ matrix.args }}
+
+      - name: Build and draft release (signed)
+        if: env.SIGNING_SECRETS == 'true'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS code signing + notarization.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows Authenticode: set certificateThumbprint in tauri.conf.json and
+          # expose the cert to the runner (CSC_LINK / CSC_KEY_PASSWORD).
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "PhraseXp ${{ github.ref_name }}"
+          releaseDraft: true
+          args: ${{ matrix.args }}

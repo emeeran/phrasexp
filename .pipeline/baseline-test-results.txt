@@ -1,0 +1,211 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+warning: the following packages contain code that will be rejected by a future version of Rust: nom v1.2.4
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/desktop_lib-894b43c7d56e5d2f)
+
+running 170 tests
+test commands::tests::espanso_yaml_simple_multiline_and_quoted ... ok
+test commands::tests::espanso_yaml_ignores_forms_vars_and_scripts ... ok
+test commands::tests::substitute_template_handles_multiple_tokens ... ok
+test db::crypto::tests::decrypt_non_prefixed_is_none ... ok
+test commands::tests::param_tokens_lists_every_distinct_interactive_token ... ok
+test commands::tests::parse_variations_splits_and_trims ... ok
+test db::crypto::tests::init_rejects_corrupt_key_and_regenerates ... ok
+test commands::tests::parses_json_with_bom_and_trailing_nul ... ok
+test commands::tests::required_params_enforce_every_placeholder ... ok
+test db::crypto::tests::init_generates_and_persists_then_reads_back ... ok
+test db::crypto::tests::round_trip_string ... ok
+test db::crypto::tests::truncated_blob_is_none ... ok
+test db::crypto::tests::tampered_ciphertext_fails_auth ... ok
+test db::crypto::tests::no_dek_encrypt_returns_none ... ok
+test db::crypto::tests::two_encryptions_differ_due_to_random_nonce ... ok
+test db::crypto::tests::wrong_key_fails_auth ... ok
+test commands::tests::substitute_template_replaces_param_and_selection ... ok
+test db::crypto::tests::init_with_unwritable_store_disables_encryption ... ok
+test db::crypto::tests::round_trip_bytes ... ok
+test commands::tests::textexpander_csv_header_and_positional ... ok
+test commands::tests::parses_atext_backup_into_folders_and_phrases ... ok
+test db::repo::tests::clipboard_text_is_encrypted_at_rest ... ok
+test db::repo::tests::custom_ai_actions_crud_roundtrip ... ok
+test db::repo::tests::builtin_ai_actions_are_seeded_and_editable ... ok
+test db::repo::tests::ai_action_macro_with_missing_action_is_not_found ... ok
+test db::repo::tests::cursor_macro_marks_the_caret_position_in_chunks ... ok
+test db::repo::tests::counter_increments_per_name_and_persists ... ok
+test db::repo::tests::add_spellcheck_ignore_persists_idempotently ... ok
+test db::repo::tests::ai_action_macro_resolves_template_and_substitutes_clipboard ... ok
+test db::repo::tests::ai_api_key_encrypted_when_nonempty ... ok
+test db::repo::tests::clipboard_capacity_is_configurable ... ok
+test db::repo::tests::clipboard_capacity_zero_is_unlimited ... ok
+test db::repo::tests::clipboard_capacity_evicts_oldest ... ok
+test db::repo::tests::delay_macro_produces_ordered_chunks_and_flattens ... ok
+test db::repo::tests::duplicate_abbreviation_allowed_for_multimatch ... ok
+test db::repo::tests::decrypt_at_rest_round_trips_to_plaintext ... ok
+test db::repo::tests::expand_through_repo_resolve ... ok
+test db::repo::tests::find_duplicates_groups_identical_content ... ok
+test db::repo::tests::locked_phrase_degrades_to_placeholder ... ok
+test db::repo::tests::merge_folders_rejects_self_missing_target ... ok
+test db::repo::tests::folder_not_empty_blocks_delete ... ok
+test db::repo::tests::merge_folders_moves_all_phrases_and_deletes_source ... ok
+test db::repo::tests::migrate_encrypt_at_rest_is_idempotent ... ok
+test db::repo::tests::merged_builtin_ai_actions_are_retired_unless_edited ... ok
+test db::repo::tests::nested_phrase_expands_recursively ... ok
+test db::repo::tests::no_crypto_layer_means_plaintext ... ok
+test db::repo::tests::phrase_crud_roundtrip ... ok
+test domain::citation::tests::apa_format ... ok
+test domain::citation::tests::chicago_format ... ok
+test domain::citation::tests::classifies_sources ... ok
+test domain::citation::tests::empty_work_errors ... ok
+test domain::citation::tests::mla_format ... ok
+test domain::citation::tests::no_authors_starts_with_title ... ok
+test domain::citation::tests::parses_crossref_envelope ... ok
+test domain::citation::tests::parses_sparse_work ... ok
+test db::repo::tests::nonsensitive_body_stays_plaintext ... ok
+test domain::citation::tests::two_authors_join_differently_per_style ... ok
+test domain::expand::tests::autotext_trigger_requires_abbreviation ... ok
+test domain::citation::tests::unknown_style_errors ... ok
+test domain::expand::tests::case_adapts_to_abbreviation ... ok
+test domain::expand::tests::inputform_missing_errors ... ok
+test domain::expand::tests::inputform_uses_inputs ... ok
+test domain::expand::tests::macro_datemath_adds_days ... ok
+test db::repo::tests::reserved_content_type_rejected ... ok
+test domain::expand::tests::macro_datetime_formats_local_time ... ok
+test domain::expand::tests::macro_env_value_or_empty ... ok
+test domain::expand::tests::macro_file_reads_contents ... ok
+test domain::expand::tests::macro_math_evaluates ... ok
+test domain::expand::tests::macro_pick_returns_an_option ... ok
+test domain::expand::tests::macro_uuid_is_valid_and_unique ... ok
+test domain::expand::tests::macro_random_stays_in_range ... ok
+test domain::expand::tests::preview_truncates_long_text ... ok
+test domain::models::tests::execute_mode_json_matches_frontend_and_old_rows ... ok
+test platform::tests::permission_options_are_null_off_macos ... ok
+test sync::tests::folder_known_matches_by_id ... ok
+test sync::tests::local_delete_survives_older_remote_edit ... ok
+test sync::tests::local_newer_is_untouched ... ok
+test sync::tests::remote_newer_wins_and_counts ... ok
+test sync::tests::remote_only_phrase_is_imported ... ok
+test sync::tests::remote_tombstone_deletes_local ... ok
+test db::repo::tests::record_usage_increments_and_stamps_and_survives_update ... ok
+test triggers::ai::tests::loopback_and_https_urls_pass_scheme_gate ... ok
+test domain::expand::tests::macro_shell_captures_stdout_trimmed ... ok
+test db::repo::tests::sensitive_body_is_encrypted_at_rest ... ok
+test triggers::ai::tests::http_error_status_becomes_err ... ok
+test triggers::ai::tests::ok_response_parses_content ... ok
+test triggers::ai::tests::brand_voice_instructions_become_system_message ... ok
+test triggers::ai::tests::no_instructions_means_no_system_message ... ok
+test triggers::ai::tests::remote_plaintext_url_is_rejected ... ok
+test triggers::ai::tests::sse_delta_parsing ... ok
+test triggers::ai::tests::ok_response_without_content_is_err ... ok
+test triggers::app_context::tests::title_matches_case_insensitive_substring ... ok
+test triggers::app_context::tests::title_matches_empty_or_unknown ... ok
+test triggers::autotext::expand::tests::apply_case_mode_respects_per_phrase_override ... ok
+test triggers::autotext::expand::tests::inputform_detected ... ok
+test triggers::autotext::expand::tests::is_delimiter_char_covers_punctuation_only ... ok
+test triggers::autotext::expand::tests::transition_pending_fires_on_delimiter_and_drops_otherwise ... ok
+test triggers::autotext::index::tests::baseline_index_sizes ... ignored, diagnostic: run with --nocapture to see baseline index sizes for memory budgeting
+test triggers::ai::tests::stream_cancel_stops_before_finish ... ok
+test triggers::ai::tests::server_error_with_non_json_body_is_err ... ok
+test db::repo::tests::soft_delete_excludes_from_resolve_and_list ... ok
+test triggers::autotext::index::tests::golden_typo_accuracy ... ignored, diagnostic: run with --nocapture to eyeball top-1 accuracy on a golden typo set
+test triggers::ai::tests::stream_http_error_is_err ... ok
+test triggers::ai::tests::stream_collects_deltas_in_order ... ok
+test triggers::autotext::index::tests::delayed_abbreviations_are_excluded_from_immediate_match ... ok
+test triggers::autotext::index::tests::longest_suffix_wins ... ok
+test triggers::autotext::index::tests::index_built_from_abbreviations ... ok
+test db::repo::tests::spellcheck_learned_roundtrip_and_unlearn ... ok
+test db::repo::tests::tags_roundtrip_normalized_and_searchable ... ok
+test db::repo::tests::retemplated_builtin_ai_actions_upgrade_in_place ... ok
+test db::repo::tests::version_history_records_and_restores ... ok
+test db::repo::tests::version_snapshot_carries_envelope_verbatim ... ok
+test triggers::autotext::index::tests::regex_abbreviation_matches_suffix ... ok
+test triggers::autotext::index::tests::rebuild_excludes_phrases_in_disabled_folders ... ok
+test db::repo::tests::phrase_versions_are_capped_per_phrase ... ok
+test triggers::autotext::index::tests::spellcheck_protects_abbreviations ... ok
+test triggers::autotext::index::tests::rank_candidates_empty_for_known_ignored_and_abbreviations ... ok
+test triggers::autotext::index::tests::is_known_uses_baseline_and_phrase_vocab ... ok
+test triggers::autotext::index::tests::index_builds_with_non_ascii_phrase_words ... ok
+test triggers::autotext::index::tests::rank_candidates_applies_case ... ok
+test triggers::autotext::index::tests::phrase_bigrams_reorder_candidates ... ok
+test triggers::autotext::index::tests::contraction_corrections_work ... ok
+test triggers::autotext::index::tests::spellcheck_corrects_typos ... ok
+test triggers::autotext::index::tests::suffix_match_basic ... ok
+test triggers::autotext::index::tests::tier2_words_are_known_but_not_correction_targets ... ok
+test triggers::autotext::listen::tests::app_chord_bare_key_and_wrong_key ... ok
+test triggers::autotext::listen::tests::app_chord_parse_and_match ... ok
+test triggers::autotext::index::tests::bigram_context_reorders_candidates ... ok
+test triggers::autotext::listen::tests::app_chord_punctuation_keys ... ok
+test triggers::autotext::listen::tests::app_chord_rejects_garbage ... ok
+test triggers::autotext::listen::tests::key_mapping_letters_digits_shift ... ok
+test triggers::autotext::listen::tests::parse_spellkey_aliases_and_whitespace ... ok
+test triggers::autotext::listen::tests::parse_spellkey_default_combo ... ok
+test triggers::autotext::listen::tests::parse_spellkey_rejects_unknown_key ... ok
+test triggers::autotext::listen::tests::sentence_candidate_finds_last_sentence ... ok
+test triggers::autotext::listen::tests::sentence_candidate_rejects_non_sentences ... ok
+test triggers::autotext::listen::tests::unmapped_key_returns_none ... ok
+test triggers::autotext::offer::tests::inject_correction_counts_word_plus_trailing_space ... ok
+test triggers::autotext::offer::tests::inject_correction_preserves_leading_punct ... ok
+test triggers::autotext::index::tests::spellcheck_respects_ignore_list ... ok
+test triggers::autotext::offer::tests::inject_correction_preserves_trailing_punct ... ok
+test triggers::autotext::offer::tests::inject_delete_word_erases_word_plus_trailing_space ... ok
+test triggers::autotext::offer::tests::inject_delete_word_includes_trailing_punct ... ok
+test triggers::autotext::offer::tests::learn_pair_from_offer_strips_wrappers ... ok
+test triggers::autotext::offer::tests::take_pending_offer_validates_against_emitted_candidates ... ok
+test triggers::autotext::index::tests::rank_candidates_respects_limit_and_preserves_ranking ... ok
+test triggers::autotext::spellcheck::tests::baseline_dict_frequency_order_is_load_bearing ... ok
+test triggers::autotext::spellcheck::tests::baseline_dictionary_is_loaded ... ok
+test triggers::autotext::spellcheck::tests::capitalization_only_for_sentence_start ... ok
+test triggers::autotext::spellcheck::tests::damerau_levenshtein_basics ... ok
+test triggers::autotext::spellcheck::tests::deletes_of_generates_all_levels ... ok
+test triggers::autotext::index::tests::rank_candidates_returns_best_first_and_deduped ... ok
+test triggers::autotext::spellcheck::tests::deletes_of_handles_multibyte_chars ... ok
+test triggers::autotext::spellcheck::tests::inflections_cover_common_forms ... ok
+test triggers::autotext::spellcheck::tests::inflections_handle_multibyte_chars ... ok
+test triggers::autotext::spellcheck::tests::keyboard_weighted_distance_prefers_adjacent_typos ... ok
+test triggers::autotext::spellcheck::tests::split_token_wrappers_and_uncheckable ... ok
+test triggers::evdev_listen::tests::decodes_press_release_repeat_and_noise ... ok
+test triggers::evdev_listen::tests::every_key_the_listener_consumes_is_mapped ... ok
+test triggers::evdev_listen::tests::shifted_a_stream_decodes_in_order ... ok
+test triggers::inject::test_injector::cursor_moves_caret_back_after_tail_text ... ok
+test triggers::inject::test_injector::deliver_types_plain_but_pastes_markdown ... ok
+test triggers::inject::test_injector::recording_injector_captures_order ... ok
+test triggers::autotext::spellcheck::tests::symspell_lookups_within_distance ... ok
+test triggers::inject::test_injector::short_ascii_types_rather_than_pastes ... ok
+test triggers::inject::test_injector::successful_delivery_is_recorded_for_repeat ... ok
+test triggers::autotext::index::tests::spellcheck_uses_inflected_phrase_vocab ... ok
+test triggers::inject::test_injector::png_rgb_becomes_opaque_rgba ... ok
+test triggers::inject::test_injector::png_rgba_roundtrip ... ok
+test triggers::autotext::offer::tests::offer_latch_expires_without_the_webview ... ok
+
+test result: ok. 168 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 3.08s
+
+     Running unittests src/main.rs (target/debug/deps/phrasexp-019da2bb3c0cb3d5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests desktop_lib
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+--- frontend ---
+npm notice run desktop@1.7.0 test
+npm notice run vitest run
+
+ RUN  v3.2.7 /home/em/code/finished/phrasexp/desktop
+
+ ✓ src/lib/editor/phraseDraft.test.ts (9 tests) 14ms
+ ✓ src/lib/components/popup/aiOptions.test.ts (6 tests) 8ms
+ ✓ src/lib/aiArgs.test.ts (10 tests) 11ms
+ ✓ src/lib/fuzzy.test.ts (17 tests) 30ms
+
+ Test Files  4 passed (4)
+      Tests  42 passed (42)
+   Start at  19:58:32
+   Duration  740ms (transform 270ms, setup 0ms, collect 284ms, tests 62ms, environment 1ms, prepare 543ms)
+
+npm notice run desktop@1.7.0 check
+npm notice run svelte-kit sync && svelte-check --tsconfig ./tsconfig.json
+1795271319062 START "/home/em/code/finished/phrasexp/desktop"
+1795271319063 COMPLETED 269 FILES 0 ERRORS 0 WARNINGS 0 FILES_WITH_PROBLEMS

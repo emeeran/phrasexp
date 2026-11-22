@@ -1,0 +1,428 @@
+/* ── Bundled fonts (OFL). Served from /static → /fonts/* in dev & prod build. ── */
+@font-face { font-family: "Inter"; font-weight: 400; font-display: swap; src: url("/fonts/Inter-Regular.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-weight: 500; font-display: swap; src: url("/fonts/Inter-Medium.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-weight: 600; font-display: swap; src: url("/fonts/Inter-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "Space Grotesk"; font-weight: 600; font-display: swap; src: url("/fonts/SpaceGrotesk-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "Space Grotesk"; font-weight: 700; font-display: swap; src: url("/fonts/SpaceGrotesk-Bold.woff2") format("woff2"); }
+
+/* ── Dark theme (default) ─────────────────────────────────────────────────── */
+:root {
+  /* surfaces — explicit trio; legacy --bg* names alias them */
+  --surface-0: #0b0d12;        /* canvas */
+  --surface-1: #151924;        /* panes, sidebar, header (~10% lighter) */
+  --surface-2: #1d2331;        /* raised: popovers, toasts, modals */
+  --bg: var(--surface-0);
+  --bg-elev: var(--surface-1);
+  --bg-elev-2: var(--surface-2);
+  --bg-elev-3: #242b3d;        /* hover tone above surface-2 */
+  /* lines */
+  --border: #2b3245;
+  --border-soft: #222839;
+  /* text */
+  --text: #edf0f6;
+  --text-dim: #9aa3b2;
+  --text-faint: #6b7280;
+  /* accent (blue) — one saturated hue, used boldly */
+  --accent: #4f8cff;
+  --accent-strong: #6a9cff;    /* hover/active intensity */
+  --accent-ink: #ffffff;       /* text on accent fills */
+  --accent-soft: rgba(79, 140, 255, 0.14);
+  --accent-solid: #2563eb;      /* deeper fill for the brand pill / solid CTAs */
+  --accent-contrast: var(--accent-ink);
+  --accent-hover: var(--accent-strong);
+  /* status */
+  --danger: #ef4444;
+  --danger-soft: rgba(239, 68, 68, 0.14);
+  --ok: #22c55e;
+  --dot-off: #565f73;          /* disabled (never masquerades as error) */
+  /* type — display vs UI split, token-gated  */
+  --font-display: "Space Grotesk", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fs-xs: 11px; --fs-sm: 11.5px; --fs-base: 13px; --fs-md: 14px;
+  --fs-2xl: 26px;
+  --text-display: var(--fs-2xl);          /* page titles / empty states only */
+  --text-dense: var(--fs-sm);             /* list rows */
+  --lh-display: 1.15;
+  --lh-normal: 1.45;
+  --tracking-display: -0.02em;
+  /* 4px spacing scale */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-10: 40px;
+  /* radii — sharp  */
+  --radius-xs: 2px;            /* chips, tags */
+  --radius-sm: 4px;            /* buttons, rows */
+  --radius: 4px;
+  --radius-lg: 6px;            /* inputs, modals only */
+  --radius-pill: 999px;        /* switch knob, scrollbars (functional) */
+  /* elevation */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
+  --shadow-focus: 0 0 0 3px var(--accent-soft);
+  /* motion — short  */
+  --dur-fast: 120ms; --dur-med: 200ms;
+  --t-fast: var(--dur-fast) ease;
+  --t-base: var(--dur-med) ease;
+
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
+  color: var(--text);
+  background-color: var(--bg);
+  /* Native form controls + scrollbars follow the active theme. */
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Light theme ──────────────────────────────────────────────────────────── */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface-0: #f4f5f7;
+  --surface-1: #ffffff;
+  --surface-2: #eceef2;
+  --bg: var(--surface-0);
+  --bg-elev: var(--surface-1);
+  --bg-elev-2: var(--surface-2);
+  --bg-elev-3: #e3e6ec;
+  --border: #d1d5db;
+  --border-soft: #e5e7eb;
+  --text: #14162b;
+  --text-dim: #5b6470;
+  --text-faint: #9ca3af;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --accent-ink: #ffffff;
+  --accent-hover: var(--accent-strong);
+  --accent-soft: rgba(37, 99, 235, 0.10);
+  --accent-solid: #1d4ed8;
+  --accent-contrast: var(--accent-ink);
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.10);
+  --ok: #16a34a;
+  --dot-off: #9aa3b2;
+  /* softer shadows on light */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.12);
+  --shadow-lg: 0 12px 40px rgba(15, 23, 42, 0.20);
+}
+
+/* ── Sepia theme — warm paper, reading-mode tones ────────────────────────── */
+:root[data-theme="sepia"] {
+  color-scheme: light;
+  --surface-0: #f1e7d0;        /* aged paper canvas */
+  --surface-1: #f7efdc;        /* page */
+  --surface-2: #eadfc4;        /* raised */
+  --bg: var(--surface-0);
+  --bg-elev: var(--surface-1);
+  --bg-elev-2: var(--surface-2);
+  --bg-elev-3: #e2d5b5;
+  --border: #cbb992;
+  --border-soft: #ddcfae;
+  --text: #3b2f1e;
+  --text-dim: #6f5d40;
+  --text-faint: #9c8a68;
+  /* accent: warm sienna — keeps the single-hue rule  */
+  --accent: #b0622a;
+  --accent-strong: #96511f;
+  --accent-ink: #fdf6e5;
+  --accent-hover: var(--accent-strong);
+  --accent-soft: rgba(176, 98, 42, 0.13);
+  --accent-solid: #96511f;
+  --accent-contrast: var(--accent-ink);
+  --danger: #b3362b;
+  --danger-soft: rgba(179, 54, 43, 0.11);
+  --ok: #5c7a2f;
+  --dot-off: #a89472;
+  --shadow-sm: 0 1px 2px rgba(59, 47, 30, 0.12);
+  --shadow-md: 0 4px 12px rgba(59, 47, 30, 0.16);
+  --shadow-lg: 0 12px 40px rgba(59, 47, 30, 0.24);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+}
+
+/* Thin, unobtrusive scrollbars everywhere. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--text);
+}
+
+input,
+textarea,
+select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+  outline: none;
+  width: 100%;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+}
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+button {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--text);
+  transition: background var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast), opacity var(--t-fast);
+}
+button:hover {
+  background: var(--bg-elev-3);
+  border-color: var(--accent);
+}
+button:active {
+  transform: translateY(1px);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+button:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+  border-color: var(--accent);
+}
+button.primary {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: var(--accent-contrast);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+button.primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+button.danger {
+  color: var(--danger);
+  border-color: var(--border);
+}
+button.danger:hover {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+button.ghost:hover {
+  background: var(--bg-elev-2);
+  border-color: transparent;
+}
+button.tiny {
+  padding: 4px 9px;
+  font-size: var(--fs-sm);
+}
+
+.muted {
+  color: var(--text-dim);
+}
+.faint {
+  color: var(--text-faint);
+}
+.row {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+.row.between {
+  justify-content: space-between;
+}
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.tag.warn {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.tag.muted {
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+}
+.tag.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.field > label {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.divider {
+  height: 1px;
+  background: var(--border-soft);
+  margin: var(--sp-1) 0;
+}
+.error {
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+/* Toggle switch — a styled checkbox (the real <input> drives state/a11y). */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  opacity: 0;
+  cursor: pointer;
+}
+.switch .slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-elev-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  transition: background var(--t-base), border-color var(--t-base);
+}
+.switch .slider::before {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 2px;
+  top: 2px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  transition: transform var(--t-base), background var(--t-base);
+}
+.switch input:checked + .slider {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.switch input:checked + .slider::before {
+  transform: translateX(16px);
+  background: #fff;
+}
+.switch input:focus-visible + .slider {
+  box-shadow: var(--shadow-focus);
+}
+.scroll {
+  overflow-y: auto;
+}
+
+/* About-tab logo adapts to theme (white on dark surfaces, slate on light/sepia). */
+.about-logo {
+  content: url("/logo-white.png");
+}
+:root[data-theme="light"] .about-logo,
+:root[data-theme="sepia"] .about-logo {
+  content: url("/logo-dark.png");
+}
+
+/* Header brand logo follows the same rule. */
+.brand-logo {
+  content: url("/logo-white.png");
+}
+:root[data-theme="light"] .brand-logo,
+:root[data-theme="sepia"] .brand-logo {
+  content: url("/logo-dark.png");
+}
+
+/* ── Motion (shared across components) ────────────────────────────────────── */
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Reduced motion: zero all token durations (the popup's 120ms hide→settle→inject
+   is Rust-side timing, not a CSS transition — unaffected). */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms; --dur-med: 0ms;
+    --t-fast: 0ms ease;
+    --t-base: 0ms ease;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,80 @@
+[package]
+name = "phrasexp"
+version = "1.7.0"
+description = "Lightweight local-first text expander"
+authors = ["Meeran"]
+edition = "2021"
+
+[lib]
+# `_lib` suffix avoids a name clash with the bin on Windows (rust-lang/cargo#8519).
+name = "desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# Without this, a release build runs in dev mode: webviews load `devUrl`
+# (localhost:1420) instead of the embedded assets, and every window is a
+# "Could not connect to localhost" error page once the dev server is gone.
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
+# Second launch hands off to the first (focuses its window); without it two
+# instances would each run a global key listener and double-inject.
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+thiserror = "1"
+enigo = "0.6"
+device_query = "1"
+rdev = "0.5"
+arboard = "3"
+raw-window-handle = "0.6"
+rand = "0.8"
+# Encryption-at-rest: AES-256-GCM with the DEK in the OS keychain.
+aes-gcm = "0.10"
+# keyring's per-OS backend is opt-in: with no backend feature it compiles to an
+# in-memory mock and the DEK silently never persists (crypto_status still reports
+# available). Real stores are declared per-target at the bottom of this file.
+zeroize = { version = "1", features = ["alloc"] }
+base64 = "0.22"
+meval = "0.2"
+csv = "1"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+futures-util = { version = "0.3", default-features = false }
+pulldown-cmark = "0.12"
+# PNG decode for image paste (clipboard image injection).
+png = "0.17"
+
+# Real OS keychain backends (see the note above `keyring`'s removal from [dependencies]).
+# Linux uses Secret Service (gnome-keyring et al.) — NOT `linux-native`/keyutils, whose
+# keys don't survive a reboot. macOS → login Keychain; Windows → Credential Manager.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
+# Native Wayland clipboard (wl-data-control): without it arboard rides XWayland only.
+arboard = { version = "3", features = ["wayland-data-control"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+# Focused-window title + popup focus (windows-sys is declarations only — no link flaws).
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
