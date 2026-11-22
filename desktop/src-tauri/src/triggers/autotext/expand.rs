@@ -109,6 +109,15 @@ fn apply_case_mode(output: String, abbr: &str, mode: CaseMode, global_on: bool) 
     }
 }
 
+/// Erase `n` characters with echo suppression on — injected backspaces would
+/// otherwise re-enter this listener's buffer (see the inject-on-worker-thread
+/// note in `maybe_expand`).
+fn erase_suppressed(inj: &dyn Injector, inj_flag: &Arc<AtomicBool>, n: usize) {
+    inj_flag.store(true, Ordering::SeqCst);
+    crate::triggers::inject::log_if_err(inj.backspace(n), "erase abbreviation");
+    inj_flag.store(false, Ordering::SeqCst);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn maybe_expand(
     buffer: &mut String,
@@ -134,20 +143,25 @@ pub(super) fn maybe_expand(
 
     if ids.len() > 1 {
         // Multi-match: erase the typed abbreviation and surface a chooser.
-        inj_flag.store(true, Ordering::SeqCst);
-        crate::triggers::inject::log_if_err(
-            inj.backspace(abbr.chars().count()),
-            "erase abbreviation",
-        );
-        inj_flag.store(false, Ordering::SeqCst);
+        erase_suppressed(inj, inj_flag, abbr.chars().count());
         buffer.clear();
         show_chooser(app, ids);
         return;
     }
 
     let id = &ids[0];
-    let Ok(Some(phrase)) = db.get_phrase(id) else {
-        return;
+    // Cache-first: the index holds parsed phrases from rebuild time, so the hot
+    // path skips the per-expansion DB read + JSON parse/decrypt entirely. Misses
+    // (sensitive phrases, freshly-edited rows) fall back to the DB.
+    let phrase: std::sync::Arc<Phrase> = {
+        let cached = idx.lock().ok().and_then(|i| i.cached_phrase(id));
+        match cached {
+            Some(p) => p,
+            None => match db.get_phrase(id) {
+                Ok(Some(p)) => std::sync::Arc::new(p),
+                _ => return,
+            },
+        }
     };
     if phrase.deleted_at.is_some() || has_inputform(&phrase) {
         return; // inputform phrases need the popup; skip silent expansion.
@@ -163,21 +177,16 @@ pub(super) fn maybe_expand(
     // AI macros make blocking network calls (1-3s). Erase the abbreviation now
     // and expand + inject in a background thread so the listener isn't blocked.
     if has_ai(&phrase) {
-        inj_flag.store(true, Ordering::SeqCst);
-        crate::triggers::inject::log_if_err(
-            inj.backspace(abbr.chars().count()),
-            "erase abbreviation",
-        );
-        inj_flag.store(false, Ordering::SeqCst);
+        erase_suppressed(inj, inj_flag, abbr.chars().count());
         buffer.clear();
 
         let state = app.state::<crate::AppState>();
         let db_arc = state.db.clone();
         let inj_arc = state.injector.clone();
-        let phrase_owned = phrase.clone();
+        let phrase_owned = phrase;
         let app_clone = app.clone();
         let case_adapt_on = case_adapt_flag.load(Ordering::Relaxed);
-        let case_mode = phrase.case_mode;
+        let case_mode = phrase_owned.case_mode;
         let abbr_owned = abbr.clone();
         std::thread::spawn(move || {
             match tauri::async_runtime::block_on(db_arc.expand_chunks_with_clip(
@@ -215,12 +224,7 @@ pub(super) fn maybe_expand(
         Err(e) => {
             eprintln!("[phrasexp] expansion error: {e}");
             let _ = app.emit("phrase-error", format!("{e}"));
-            inj_flag.store(true, Ordering::SeqCst);
-            crate::triggers::inject::log_if_err(
-                inj.backspace(abbr.chars().count()),
-                "erase abbreviation",
-            );
-            inj_flag.store(false, Ordering::SeqCst);
+            erase_suppressed(inj, inj_flag, abbr.chars().count());
             buffer.clear();
             return;
         }
@@ -243,10 +247,10 @@ pub(super) fn maybe_expand(
         }
     }
     buffer.clear();
-    // Usage stats (1.4): expansion succeeded; count it (fire-and-forget).
-    let _ = db.record_usage(&phrase.id);
     let state = app.state::<crate::AppState>();
+    let db_arc = state.db.clone();
     let inj_arc = state.injector.clone();
+    let phrase_id = phrase.id.clone();
     let flag = inj_flag.clone();
     let le = last_echo.clone();
     std::thread::spawn(move || {
@@ -255,6 +259,9 @@ pub(super) fn maybe_expand(
             crate::triggers::inject::deliver_chunks(&*inj_arc, content_type, &chunks),
             "deliver",
         );
+        // Usage stats (1.4): counted off the listener thread — a WAL write has no
+        // business sitting between a keystroke and its injection.
+        let _ = db_arc.record_usage(&phrase_id);
         quiet_clear(&flag, &le);
     });
 }
@@ -268,6 +275,7 @@ pub(super) fn fire_delayed(
     pending: &PendingMatch,
     delim_char: Option<char>, // Some(c) for printable delimiters, None for Return/Tab
     buffer: &mut String,
+    idx: &Mutex<AbbrevIndex>,
     db: &Db,
     inj_flag: &Arc<AtomicBool>,
     last_echo: &Arc<Mutex<Option<std::time::Instant>>>,
@@ -290,10 +298,20 @@ pub(super) fn fire_delayed(
         return;
     }
     let id = ids[0].clone();
-    let Ok(Some(phrase)) = db.get_phrase(&id) else {
-        // Phrase vanished while pending: leave the user's text as typed.
-        inj_flag.store(false, Ordering::SeqCst);
-        return;
+    // Cache-first, same as maybe_expand (index holds parsed phrases from rebuild).
+    let phrase: std::sync::Arc<Phrase> = {
+        let cached = idx.lock().ok().and_then(|i| i.cached_phrase(&id));
+        match cached {
+            Some(p) => p,
+            None => match db.get_phrase(&id) {
+                Ok(Some(p)) => std::sync::Arc::new(p),
+                _ => {
+                    // Phrase vanished while pending: leave the user's text as typed.
+                    inj_flag.store(false, Ordering::SeqCst);
+                    return;
+                }
+            },
+        }
     };
     if phrase.deleted_at.is_some() || has_inputform(&phrase) {
         inj_flag.store(false, Ordering::SeqCst);
@@ -367,11 +385,12 @@ pub(super) fn fire_delayed(
     let global_on = case_adapt_flag.load(Ordering::Relaxed);
     let chunks = apply_case_mode_chunks(chunks, &abbr, phrase.case_mode, global_on);
     buffer.clear();
-    let _ = db.record_usage(&phrase.id);
     let content_type = phrase.content_type;
+    let phrase_id = phrase.id.clone();
     let flag = inj_flag.clone();
     let le = last_echo.clone();
     let delim = delim_char;
+    let db_arc = state.db.clone();
     let inj_sync = state.injector.clone();
     std::thread::spawn(move || {
         crate::triggers::inject::log_if_err(inj_sync.backspace(erase), "erase abbreviation");
@@ -380,6 +399,8 @@ pub(super) fn fire_delayed(
             "deliver",
         );
         retype_delimiter(&inj_sync, delim);
+        // Usage stats off the listener thread (same rationale as maybe_expand).
+        let _ = db_arc.record_usage(&phrase_id);
         quiet_clear(&flag, &le);
     });
 }
@@ -394,8 +415,8 @@ fn retype_delimiter(inj: &Arc<dyn Injector>, delim: Option<char>) {
             crate::triggers::inject::log_if_err(inj.type_text(&c.to_string()), "retype delimiter");
         }
         None => {
-            use enigo::{Enigo, Key, Keyboard, Settings};
-            if let Ok(mut e) = Enigo::new(&Settings::default()) {
+            use enigo::{Key, Keyboard};
+            if let Ok(mut e) = crate::triggers::inject::enigo() {
                 let _ = e.key(Key::Return, enigo::Direction::Press);
                 let _ = e.key(Key::Return, enigo::Direction::Release);
             }
@@ -404,34 +425,41 @@ fn retype_delimiter(inj: &Arc<dyn Injector>, delim: Option<char>) {
 }
 
 /// Wait for injected echoes to quiesce, then clear the suppression flag
-/// (shared tail of the delayed-mode injection workers).
+/// (shared tail of the delayed-mode injection workers). Sleeps on the shared
+/// echo condvar instead of polling the clock: the listener pings after every
+/// observed echo, so a worker wakes only when something actually happened.
+/// Phase 1 waits (bounded 500 ms) for the first echo; phase 2 waits out the
+/// 60 ms quiet gap after the last one. No echo at all → immediate release
+/// after the phase-1 deadline, same as the old polling loop.
 pub(super) fn quiet_clear(
     flag: &Arc<AtomicBool>,
     last_echo: &Arc<Mutex<Option<std::time::Instant>>>,
 ) {
-    if let Ok(mut t) = last_echo.lock() {
-        *t = None;
-    }
-    let mut waited = 0u64;
-    while waited < 500 {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        waited += 10;
-        if last_echo.lock().map(|t| t.is_some()).unwrap_or(false) {
+    let quiet_gap = std::time::Duration::from_millis(60);
+    let mut guard = last_echo.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = None;
+    // Phase 1 — wait for the first echo, bounded (an expansion can produce none).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    while guard.is_none() {
+        let now = std::time::Instant::now();
+        if now >= deadline {
             break;
         }
+        let (g, _t) = crate::triggers::inject::ECHO_CV
+            .wait_timeout(guard, deadline - now)
+            .unwrap_or_else(|e| e.into_inner());
+        guard = g;
     }
+    // Phase 2 — wait out the quiet gap after the last echo.
     loop {
-        std::thread::sleep(std::time::Duration::from_millis(15));
-        let quiet = last_echo
-            .lock()
-            .map(|t| {
-                t.map(|i| i.elapsed() > std::time::Duration::from_millis(60))
-                    .unwrap_or(true)
-            })
-            .unwrap_or(true);
-        if quiet {
+        let elapsed_since_echo = guard.map(|t| t.elapsed()).unwrap_or_default();
+        if guard.is_none() || elapsed_since_echo >= quiet_gap {
             break;
         }
+        let (g, _t) = crate::triggers::inject::ECHO_CV
+            .wait_timeout(guard, quiet_gap - elapsed_since_echo)
+            .unwrap_or_else(|e| e.into_inner());
+        guard = g;
     }
     flag.store(false, Ordering::SeqCst);
 }

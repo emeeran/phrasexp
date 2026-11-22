@@ -92,3 +92,25 @@ describe("buildSavePayload", () => {
     expect("payload" in r && r.payload.app_scope).toBeNull();
   });
 });
+
+import { bodyPreview } from "./phraseDraft";
+
+describe("bodyPreview (3.5 live preview)", () => {
+  it("joins text verbatim and labels macros", () => {
+    const segs: Segment[] = [
+      { type: "text", text: "Report as of " },
+      { type: "macro", macro: { type: "datetime", format: "%Y" } as Segment extends never ? never : never },
+    ] as unknown as Segment[];
+    // The macro shape only needs `.type` for the label — cast keeps the test
+    // independent of every variant's full field set.
+    expect(bodyPreview(segs)).toBe("Report as of {date/time}");
+  });
+
+  it("labels images and unknown macro types", () => {
+    const segs = [
+      { type: "macro", macro: { type: "image", path: "/tmp/x.png" } },
+      { type: "macro", macro: { type: "something_new" } },
+    ] as unknown as Segment[];
+    expect(bodyPreview(segs)).toBe("{image}{something_new}");
+  });
+});

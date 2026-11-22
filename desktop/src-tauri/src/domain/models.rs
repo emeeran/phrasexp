@@ -234,111 +234,75 @@ pub struct AiAction {
 }
 
 /// Stable ids for the seeded builtin actions (also used by the frontend picker).
-/// New entries are APPENDED: seeding assigns `sort_order` from the index and uses
-/// INSERT OR IGNORE, so reordering would shuffle existing users' menus.
-pub const BUILTIN_AI_ACTIONS: [(&str, &str, &str); 20] = [
-    (
-        "ai-translate",
-        "Translate",
-        "Translate to {language}:\n{clipboard}",
-    ),
-    (
-        "ai-formal",
-        "Make formal",
-        "Rewrite in a formal, professional tone:\n{clipboard}",
-    ),
-    (
-        "ai-casual",
-        "Make casual",
-        "Rewrite in a casual, friendly tone:\n{clipboard}",
-    ),
-    (
-        "ai-shorten",
-        "Shorten",
-        "Shorten while keeping key points:\n{clipboard}",
-    ),
-    (
-        "ai-expand",
-        "Expand",
-        "Expand and elaborate on:\n{clipboard}",
-    ),
+/// The 2026-11 menu revamp curated this to a single ordered 13-tool set — the
+/// order here IS the popup menu order (first 9 rows get 1-9 quick keys). Existing
+/// installs are converged onto it by the REVAMPED/RETIRED passes in `run_migrations`;
+/// fresh installs seed it directly.
+pub const BUILTIN_AI_ACTIONS: [(&str, &str, &str); 13] = [
     (
         "ai-grammar",
-        "Fix grammar",
-        "Fix grammar and spelling:\n{clipboard}",
-    ),
-    ("ai-summarize", "Summarize", "Summarize:\n{clipboard}"),
-    (
-        "ai-explain",
-        "Explain simply",
-        "Explain this in simple terms:\n{clipboard}",
-    ),
-    (
-        "ai-continue",
-        "Continue writing",
-        "Continue writing this text, matching its tone and style:\n{clipboard}",
+        "Grammar check",
+        "Fix grammar, spelling, and punctuation only. Do not change word choice, sentence structure, tone, or meaning. Keep formatting and line breaks exactly. If the text is already correct, return it unchanged:\n{clipboard}",
     ),
     (
         "ai-improve",
-        "Improve writing",
-        "Improve this writing — clarity, flow, and word choice — keeping the meaning:\n{clipboard}",
+        "Rewrite for clarity",
+        "Rewrite for maximum clarity. Use simple, direct sentences; cut filler and redundancy. Preserve every fact, the original meaning and tone, and the formatting:\n{clipboard}",
     ),
     (
-        "ai-confident",
-        "Confident tone",
-        "Rewrite in a confident, assertive tone:\n{clipboard}",
+        "ai-formal",
+        "Professional tone",
+        "Rewrite in a professional, formal tone — precise, polite, no slang or contractions. Keep the meaning and roughly the same length:\n{clipboard}",
     ),
     (
-        "ai-bullets",
-        "Bullet points",
-        "Convert into a concise bullet-point list:\n{clipboard}",
+        "ai-casual",
+        "Friendly / casual tone",
+        "Rewrite in a friendly, casual tone — contractions, everyday words, warm phrasing; natural, not childish. Keep the meaning and key content:\n{clipboard}",
     ),
     (
-        "ai-prompt-opt",
-        "Optimize prompt",
-        "Optimize this prompt for an LLM — make it specific, structured, and unambiguous:\n{clipboard}",
-    ),
-    // QuillBot-style paraphrase modes (preliminary report 1.1) — appended so existing
-    // users' menu order is untouched.
-    (
-        "ai-fluency",
-        "Improve fluency",
-        "Rewrite for natural fluency — smooth, idiomatic phrasing that reads effortlessly:\n{clipboard}",
+        "ai-humanize",
+        "Humanize",
+        "Rewrite so the text reads as naturally human-written: vary sentence length and rhythm, remove robotic or formulaic phrasing (e.g. \"delve\", \"in today's fast-paced world\", \"it is important to note\") and other AI tell-tale patterns. Preserve the meaning, facts, and formatting — add nothing:\n{clipboard}",
     ),
     (
         "ai-academic",
         "Academic tone",
-        "Rewrite in an academic, scholarly register — precise, formal, hedged where appropriate:\n{clipboard}",
-    ),
-    // Grammarly-style tone tools (preliminary report 1.2).
-    (
-        "ai-tone-detect",
-        "Detect tone",
-        "Analyze the tone of this text. Reply with 2-4 comma-separated tone labels only (e.g. formal, friendly, urgent) — nothing else:\n{clipboard}",
+        "Rewrite in an academic register — precise, formal, objective, appropriately hedged. Keep discipline-standard terminology; preserve citations, quotes, and technical terms exactly:\n{clipboard}",
     ),
     (
-        "ai-friendlier",
-        "Friendlier tone",
-        "Rewrite in a warmer, friendlier tone while keeping the meaning:\n{clipboard}",
+        "ai-prompt-opt",
+        "Optimize prompt",
+        "Rewrite this as an optimized prompt for a modern LLM: a clear task, the relevant context, explicit constraints, and the exact output format. Return only the prompt text:\n{clipboard}",
     ),
     (
-        "ai-direct",
-        "More direct",
-        "Rewrite more directly and confidently — cut hedging, filler, and apologies:\n{clipboard}",
-    ),
-    // QuillBot-style paraphrase mode + mode-token action (report: writing quality).
-    // {mode} makes the action interactive — the frontend prompts with style chips
-    // and remembers the last pick. The dedicated tone builtins above stay: they run
-    // without a prompt.
-    (
-        "ai-creative",
-        "Creative rewrite",
-        "Rewrite this text creatively — vivid, original phrasing while keeping the meaning:\n{clipboard}",
+        "ai-shorten",
+        "Shorter",
+        "Shorten this text to roughly half its length. Cut redundancy and filler; keep every key point, name, and number. Add nothing:\n{clipboard}",
     ),
     (
-        "ai-paraphrase",
-        "Paraphrase",
-        "Paraphrase this text in a {mode} style — same meaning, fresh wording:\n{clipboard}",
+        "ai-expand",
+        "Expand",
+        "Expand this text with relevant detail and elaboration to roughly twice its length. Stay on topic, keep the author's voice, and add no invented facts:\n{clipboard}",
+    ),
+    (
+        "ai-summarize",
+        "Summarize",
+        "Summarize the text — target length {length} (e.g. 30 words, 3 bullets), output as {format} (e.g. paragraph, bullet points). Keep only the key points; no commentary:\n{clipboard}",
+    ),
+    (
+        "ai-translate",
+        "Translate (Tamil ⇄ English)",
+        "Detect the language of the text, then translate: Tamil → English, anything else → Tamil. Translate naturally — preserve meaning, formatting, and line breaks; keep proper nouns and technical terms:\n{clipboard}",
+    ),
+    (
+        "ai-active-voice",
+        "Active voice",
+        "Convert every passive-voice sentence to active voice. Keep the meaning, tense, and roughly the length; leave already-active sentences unchanged. Keep formatting and line breaks:\n{clipboard}",
+    ),
+    (
+        "ai-passive-voice",
+        "Passive voice",
+        "Convert active-voice sentences to passive voice where a natural passive form exists. Keep the meaning, tense, and roughly the length. Keep formatting and line breaks:\n{clipboard}",
     ),
 ];
 
@@ -373,11 +337,142 @@ pub const MERGED_AI_ACTIONS: [(&str, &str, &str, &str); 4] = [
     ),
 ];
 
+/// 2026-11 menu revamp: (id, new name, new template, pre-revamp templates). On
+/// existing installs the seeding pass retitles, re-prompts, and re-sorts an
+/// untouched row (matched on template verbatim) onto the curated 13-tool menu; a
+/// user-edited template is kept — it just stays where it was in the menu. The
+/// `sort_order` written is the id's position in `BUILTIN_AI_ACTIONS`.
+pub const REVAMPED_AI_ACTIONS: [(&str, &str, &str, &[&str]); 10] = [
+    (
+        "ai-grammar",
+        BUILTIN_AI_ACTIONS[0].1,
+        BUILTIN_AI_ACTIONS[0].2,
+        &["Fix grammar, spelling, and punctuation only — do not change wording, style, or meaning:\n{clipboard}"],
+    ),
+    (
+        "ai-improve",
+        BUILTIN_AI_ACTIONS[1].1,
+        BUILTIN_AI_ACTIONS[1].2,
+        &["Improve this writing — tighten clarity and flow, upgrade word choice. Keep the author's voice and meaning:\n{clipboard}"],
+    ),
+    (
+        "ai-formal",
+        BUILTIN_AI_ACTIONS[2].1,
+        BUILTIN_AI_ACTIONS[2].2,
+        &["Rewrite in a formal, professional tone. Keep the meaning and roughly the same length:\n{clipboard}"],
+    ),
+    (
+        "ai-casual",
+        BUILTIN_AI_ACTIONS[3].1,
+        BUILTIN_AI_ACTIONS[3].2,
+        &["Rewrite in a casual, friendly tone — contractions, everyday words. Keep the meaning:\n{clipboard}"],
+    ),
+    (
+        "ai-academic",
+        BUILTIN_AI_ACTIONS[5].1,
+        BUILTIN_AI_ACTIONS[5].2,
+        &["Rewrite in an academic register — precise, formal, appropriately hedged. Preserve citations and technical terms:\n{clipboard}"],
+    ),
+    (
+        "ai-prompt-opt",
+        BUILTIN_AI_ACTIONS[6].1,
+        BUILTIN_AI_ACTIONS[6].2,
+        &["Rewrite this as a well-structured prompt for a large language model: state the task, give the context, and specify the output format. Return only the prompt:\n{clipboard}"],
+    ),
+    (
+        "ai-shorten",
+        BUILTIN_AI_ACTIONS[7].1,
+        BUILTIN_AI_ACTIONS[7].2,
+        &["Shorten this text — cut redundancy, keep every key point and the original tone:\n{clipboard}"],
+    ),
+    (
+        "ai-expand",
+        BUILTIN_AI_ACTIONS[8].1,
+        BUILTIN_AI_ACTIONS[8].2,
+        &["Expand this text with relevant detail and elaboration — roughly double the length, same voice:\n{clipboard}"],
+    ),
+    (
+        "ai-summarize",
+        BUILTIN_AI_ACTIONS[9].1,
+        BUILTIN_AI_ACTIONS[9].2,
+        &["Summarize — target length {length} (e.g. 30 words, 3 bullets). Output as {format}:\n{clipboard}"],
+    ),
+    (
+        "ai-translate",
+        BUILTIN_AI_ACTIONS[10].1,
+        BUILTIN_AI_ACTIONS[10].2,
+        &[
+            // Pre-revamp: interactive target language. The revamp makes the
+            // builtin auto Tamil⇄English; a user who wants a fixed language
+            // edits the template back to "Translate to {language}.…" and it sticks.
+            "Translate to {language}. Preserve formatting and line breaks; keep technical terms and proper nouns unless a natural equivalent exists:\n{clipboard}",
+        ],
+    ),
+];
+
+/// Builtins dropped by the 2026-11 menu revamp (superseded by the curated set):
+/// (id, name, template). Seeding deletes a retired row only while it still
+/// matches these originals verbatim — a user-edited action survives as a custom
+/// action. Fresh installs never get these ids at all.
+pub const RETIRED_AI_ACTIONS: [(&str, &str, &str); 10] = [
+    (
+        "ai-explain",
+        "Explain simply",
+        "Explain this in simple terms a non-expert can follow — short sentences, a concrete example if helpful:\n{clipboard}",
+    ),
+    (
+        "ai-continue",
+        "Continue writing",
+        "Continue writing from where this text stops, matching its tone, style, and formatting. Return ONLY the continuation — do not repeat the original text:\n{clipboard}",
+    ),
+    (
+        "ai-confident",
+        "Confident tone",
+        "Rewrite in a confident, assertive tone — remove hedging and qualifiers, keep the claims:\n{clipboard}",
+    ),
+    (
+        "ai-bullets",
+        "Bullet points",
+        "Convert into a concise bullet-point list — one point per line, starting with '- ', keeping the original order:\n{clipboard}",
+    ),
+    (
+        "ai-tone-detect",
+        "Detect tone",
+        "Identify the tone of this text. Reply with 2-4 comma-separated lowercase tone labels only (e.g. formal, friendly, urgent) — no other words:\n{clipboard}",
+    ),
+    (
+        "ai-friendlier",
+        "Friendlier tone",
+        "Rewrite in a warmer, friendlier tone while keeping the meaning and key content:\n{clipboard}",
+    ),
+    (
+        "ai-direct",
+        "More direct",
+        "Rewrite more directly — cut hedging, filler, and apologies. Keep the claims and the meaning:\n{clipboard}",
+    ),
+    (
+        "ai-fluency",
+        "Improve fluency",
+        "Rewrite for natural fluency — idiomatic phrasing a native speaker would use. Keep the meaning and register:\n{clipboard}",
+    ),
+    (
+        "ai-creative",
+        "Creative rewrite",
+        "Rewrite this text creatively — vivid, original phrasing that keeps the meaning:\n{clipboard}",
+    ),
+    (
+        "ai-paraphrase",
+        "Paraphrase",
+        "Paraphrase this text in a {mode} style — same meaning, fresh wording, similar length:\n{clipboard}",
+    ),
+];
+
 /// Builtins whose template changed in place (e.g. Translate now prompts for the
 /// target language via `{language}`): (id, old template, new template). Seeding
 /// upgrades a row only while it still carries the old template verbatim — a
-/// user-edited template is kept.
-pub const RETEMPLATED_AI_ACTIONS: [(&str, &str, &str); 3] = [
+/// user-edited template is kept. The chain's final target is pre-revamp text;
+/// `REVAMPED_AI_ACTIONS` carries rows the rest of the way onto the current set.
+pub const RETEMPLATED_AI_ACTIONS: [(&str, &str, &str); 22] = [
     (
         "ai-translate",
         "Translate to French:\n{clipboard}",
@@ -396,6 +491,100 @@ pub const RETEMPLATED_AI_ACTIONS: [(&str, &str, &str); 3] = [
         "ai-summarize",
         "Summarize — target length {length} (e.g. 30 words, 3 bullets):\n{clipboard}",
         "Summarize — target length {length} (e.g. 30 words, 3 bullets). Output as {format}:\n{clipboard}",
+    ),    (
+        "ai-translate",
+        "Translate to {language}:\n{clipboard}",
+        "Translate to {language}. Preserve formatting and line breaks; keep technical terms and proper nouns unless a natural equivalent exists:\n{clipboard}",
+    ),
+    (
+        "ai-formal",
+        "Rewrite in a formal, professional tone:\n{clipboard}",
+        "Rewrite in a formal, professional tone. Keep the meaning and roughly the same length:\n{clipboard}",
+    ),
+    (
+        "ai-casual",
+        "Rewrite in a casual, friendly tone:\n{clipboard}",
+        "Rewrite in a casual, friendly tone — contractions, everyday words. Keep the meaning:\n{clipboard}",
+    ),
+    (
+        "ai-shorten",
+        "Shorten while keeping key points:\n{clipboard}",
+        "Shorten this text — cut redundancy, keep every key point and the original tone:\n{clipboard}",
+    ),
+    (
+        "ai-expand",
+        "Expand and elaborate on:\n{clipboard}",
+        "Expand this text with relevant detail and elaboration — roughly double the length, same voice:\n{clipboard}",
+    ),
+    (
+        "ai-grammar",
+        "Fix grammar and spelling:\n{clipboard}",
+        "Fix grammar, spelling, and punctuation only — do not change wording, style, or meaning:\n{clipboard}",
+    ),
+    (
+        "ai-explain",
+        "Explain this in simple terms:\n{clipboard}",
+        "Explain this in simple terms a non-expert can follow — short sentences, a concrete example if helpful:\n{clipboard}",
+    ),
+    (
+        "ai-continue",
+        "Continue writing this text, matching its tone and style:\n{clipboard}",
+        "Continue writing from where this text stops, matching its tone, style, and formatting. Return ONLY the continuation — do not repeat the original text:\n{clipboard}",
+    ),
+    (
+        "ai-improve",
+        "Improve this writing — clarity, flow, and word choice — keeping the meaning:\n{clipboard}",
+        "Improve this writing — tighten clarity and flow, upgrade word choice. Keep the author's voice and meaning:\n{clipboard}",
+    ),
+    (
+        "ai-confident",
+        "Rewrite in a confident, assertive tone:\n{clipboard}",
+        "Rewrite in a confident, assertive tone — remove hedging and qualifiers, keep the claims:\n{clipboard}",
+    ),
+    (
+        "ai-bullets",
+        "Convert into a concise bullet-point list:\n{clipboard}",
+        "Convert into a concise bullet-point list — one point per line, starting with '- ', keeping the original order:\n{clipboard}",
+    ),
+    (
+        "ai-prompt-opt",
+        "Optimize this prompt for an LLM — make it specific, structured, and unambiguous:\n{clipboard}",
+        "Rewrite this as a well-structured prompt for a large language model: state the task, give the context, and specify the output format. Return only the prompt:\n{clipboard}",
+    ),
+    (
+        "ai-fluency",
+        "Rewrite for natural fluency — smooth, idiomatic phrasing that reads effortlessly:\n{clipboard}",
+        "Rewrite for natural fluency — idiomatic phrasing a native speaker would use. Keep the meaning and register:\n{clipboard}",
+    ),
+    (
+        "ai-academic",
+        "Rewrite in an academic, scholarly register — precise, formal, hedged where appropriate:\n{clipboard}",
+        "Rewrite in an academic register — precise, formal, appropriately hedged. Preserve citations and technical terms:\n{clipboard}",
+    ),
+    (
+        "ai-tone-detect",
+        "Analyze the tone of this text. Reply with 2-4 comma-separated tone labels only (e.g. formal, friendly, urgent) — nothing else:\n{clipboard}",
+        "Identify the tone of this text. Reply with 2-4 comma-separated lowercase tone labels only (e.g. formal, friendly, urgent) — no other words:\n{clipboard}",
+    ),
+    (
+        "ai-friendlier",
+        "Rewrite in a warmer, friendlier tone while keeping the meaning:\n{clipboard}",
+        "Rewrite in a warmer, friendlier tone while keeping the meaning and key content:\n{clipboard}",
+    ),
+    (
+        "ai-direct",
+        "Rewrite more directly and confidently — cut hedging, filler, and apologies:\n{clipboard}",
+        "Rewrite more directly — cut hedging, filler, and apologies. Keep the claims and the meaning:\n{clipboard}",
+    ),
+    (
+        "ai-creative",
+        "Rewrite this text creatively — vivid, original phrasing while keeping the meaning:\n{clipboard}",
+        "Rewrite this text creatively — vivid, original phrasing that keeps the meaning:\n{clipboard}",
+    ),
+    (
+        "ai-paraphrase",
+        "Paraphrase this text in a {mode} style — same meaning, fresh wording:\n{clipboard}",
+        "Paraphrase this text in a {mode} style — same meaning, fresh wording, similar length:\n{clipboard}",
     ),
 ];
 
@@ -786,6 +975,12 @@ pub struct Settings {
     /// so all actions/macros share one style directive. Empty = no system message.
     #[serde(default)]
     pub ai_instructions: String,
+    /// Sampling temperature sent with every AI call (provider scale 0–2).
+    #[serde(default = "default_ai_temperature")]
+    pub ai_temperature: f64,
+    /// Output cap in tokens; 0 = provider default. Long generations need a raise.
+    #[serde(default)]
+    pub ai_max_tokens: i64,
     /// Encrypt sensitive phrases, the AI key, and clipboard history at rest
     /// (AES-256-GCM, DEK in the OS keychain). Inert when no keychain is available.
     #[serde(default = "default_true")]
@@ -794,6 +989,12 @@ pub struct Settings {
     /// Empty = sync off. Holds a `library.json` snapshot merged last-writer-wins.
     #[serde(default)]
     pub sync_dir: String,
+    /// Sync snapshot passphrase (3.1). Empty = plaintext snapshot (legacy). When set,
+    /// the snapshot is sealed with AES-256-GCM under a PBKDF2-HMAC-SHA256 key derived
+    /// from it — every device sharing the folder must use the SAME passphrase.
+    /// Stored like the AI key: envelope-encrypted at rest when that feature is on.
+    #[serde(default)]
+    pub sync_passphrase: String,
 }
 
 fn default_ai_base_url() -> String {
@@ -804,6 +1005,9 @@ fn default_ai_selection_hotkey() -> String {
 }
 fn default_ai_model() -> String {
     "llama-3.3-70b-versatile".to_string()
+}
+fn default_ai_temperature() -> f64 {
+    1.0
 }
 fn default_spellcheck_mode() -> String {
     "normal".to_string()
@@ -840,9 +1044,91 @@ impl Settings {
             ai_api_key: String::new(),
             ai_model: default_ai_model(),
             ai_instructions: String::new(),
+            ai_temperature: default_ai_temperature(),
+            ai_max_tokens: 0,
             ai_selection_hotkey: default_ai_selection_hotkey(),
             encrypt_at_rest: true,
             sync_dir: String::new(),
+            sync_passphrase: String::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod ai_action_tests {
+    use super::*;
+
+    /// Every retemplate CHAIN's final target must be handed to the revamp pass —
+    /// a drift here would strand upgraded (untouched) rows on stale pre-revamp
+    /// prompts. Chains may have multiple steps; only the last matters.
+    #[test]
+    fn retemplate_targets_feed_the_revamp() {
+        let mut last_target: std::collections::HashMap<&str, &str> =
+            std::collections::HashMap::new();
+        for (id, _old, new) in RETEMPLATED_AI_ACTIONS {
+            last_target.insert(id, new);
+        }
+        for (id, target) in last_target {
+            if let Some(revamped) = REVAMPED_AI_ACTIONS
+                .iter()
+                .find(|(rid, _, _, olds)| *rid == id && olds.contains(&target))
+            {
+                let builtin = BUILTIN_AI_ACTIONS
+                    .iter()
+                    .find(|(bid, _, _)| *bid == id)
+                    .unwrap_or_else(|| panic!("revamp target for unknown builtin {id}"));
+                assert_eq!(builtin.2, revamped.2, "{id}: revamp drifted from builtin");
+            } else {
+                // Chain ends at a retired builtin — the retire pass must match
+                // that exact text so untouched rows don't strand on stale tools.
+                let retired = RETIRED_AI_ACTIONS
+                    .iter()
+                    .find(|(rid, _, t)| *rid == id && *t == target)
+                    .unwrap_or_else(|| {
+                        panic!("retemplate chain for {id} ends at '{target}' — neither revamp nor retire picks it up")
+                    });
+                assert_eq!(retired.2, target, "{id}: retire text drifted");
+            }
+        }
+    }
+
+    /// Every revamp row must point at its builtin's CURRENT name + template, and
+    /// its listed pre-revamp templates must never equal the current one (else the
+    /// upgrade would fire forever, fighting user edits back).
+    #[test]
+    fn revamp_targets_match_current_builtins() {
+        for (id, name, template, olds) in REVAMPED_AI_ACTIONS {
+            let builtin = BUILTIN_AI_ACTIONS
+                .iter()
+                .find(|(bid, _, _)| *bid == id)
+                .unwrap_or_else(|| panic!("revamp of unknown builtin {id}"));
+            assert_eq!(builtin.1, name, "{id}: revamp name drifted from builtin");
+            assert_eq!(builtin.2, template, "{id}: revamp template drifted from builtin");
+            assert!(
+                !olds.contains(&template),
+                "{id}: a pre-revamp template equals the current one"
+            );
+        }
+    }
+
+    /// Retired ids must be gone from the builtin set — otherwise seeding would
+    /// re-insert the row the retire pass just deleted (INSERT OR IGNORE).
+    #[test]
+    fn retired_ids_are_not_builtins() {
+        for (id, _, _) in RETIRED_AI_ACTIONS {
+            assert!(
+                !BUILTIN_AI_ACTIONS.iter().any(|(bid, _, _)| *bid == id),
+                "{id} is retired but still a builtin"
+            );
+        }
+    }
+
+    /// Builtin ids must be unique — seeding keys rows on them.
+    #[test]
+    fn builtin_ids_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for (id, _, _) in BUILTIN_AI_ACTIONS {
+            assert!(seen.insert(id), "duplicate builtin id {id}");
         }
     }
 }

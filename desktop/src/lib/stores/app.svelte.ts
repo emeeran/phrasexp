@@ -11,7 +11,7 @@ export interface EditingPhrase {
   initialText?: string;
 }
 
-export type ModalKind = "dupes" | "history" | null;
+export type ModalKind = "dupes" | "history" | "unused" | null;
 
 function initialRoute(): Route {
   const saved = localStorage.getItem("phrasexp-route");
@@ -31,6 +31,8 @@ export const app = $state({
   versions: [] as PhraseVersion[],
   /** Duplicate groups for the dupes modal. */
   dupGroups: [] as PhraseSummary[][],
+  /** Never-expanded phrases for the unused-review modal (usage stats). */
+  unusedPhrases: [] as PhraseSummary[],
 
   routeTo(r: Route) {
     this.route = r;

@@ -51,6 +51,9 @@ export const api = {
       sort,
     }),
   getPhrase: (phraseId: string) => invoke<Phrase>("get_phrase", { phraseId }),
+  /** Batch fetch by id — the popup chooser resolves its candidates without a
+   *  whole-library list. Preserves the given id order. */
+  getPhrases: (ids: string[]) => invoke<PhraseSummary[]>("get_phrases", { ids }),
   createPhrase: (payload: PhraseCreate) => invoke<Phrase>("create_phrase", { payload }),
   updatePhrase: (phraseId: string, payload: PhraseUpdate) =>
     invoke<Phrase>("update_phrase", { phraseId, payload }),
@@ -82,6 +85,13 @@ export const api = {
 
   // Library import/export.
   exportLibrary: () => invoke<LibraryExport>("export_library"),
+  /** Format exporters (Espanso YAML / TextExpander CSV / plain CSV). Macros,
+   *  images, and regex triggers have no honest representation there — the
+   *  counts report what was skipped. */
+  exportEspanso: () => invoke<{ text: string; exported: number; skipped: number }>("export_espanso"),
+  exportTextexpanderCsv: () =>
+    invoke<{ text: string; exported: number; skipped: number }>("export_textexpander_csv"),
+  exportCsv: () => invoke<{ text: string; exported: number; skipped: number }>("export_csv"),
   importCsv: (csvText: string, folderId?: string | null) =>
     invoke<number>("import_csv", { csvText, folderId: folderId ?? null }),
   importAhk: (ahkText: string, folderId?: string | null) =>
@@ -144,11 +154,12 @@ export const api = {
     invoke<string>("run_ai_action", { actionId, params: params ?? null }),
   /** Abort an in-flight streaming AI request (popup discard/cancel mid-stream). */
   aiCancel: () => invoke<void>("ai_cancel"),
-  /** Resolve the result popup: replace | insert | copy | retry | discard.
+  /** Resolve the result popup: replace | insert | copy | retry | discard | rerun.
    *  `text` overrides the pending result — sent when the user picked one option
-   *  out of a multi-option response. */
+   *  out of a multi-option response. For `rerun` it carries the target action id
+   *  (result-view quick chips re-run the same selection through another builtin). */
   aiDecide: (
-    decision: "replace" | "insert" | "copy" | "retry" | "discard",
+    decision: "replace" | "insert" | "copy" | "retry" | "discard" | "rerun",
     text?: string,
   ) => invoke<string>("ai_decide", { decision, text }),
   /** Generate rewording variations of a text (editor "variations" feature). */
@@ -157,6 +168,10 @@ export const api = {
   // File-based sync (Settings → Data).
   syncNow: () => invoke<SyncReport>("sync_now"),
   syncSetDir: (dir: string) => invoke<void>("sync_set_dir", { dir }),
+  /** Sync snapshot passphrase — every device sharing the folder must use the
+   *  same one; a mismatch is a named decryption error, never a silent overwrite. */
+  syncSetPassphrase: (passphrase: string) =>
+    invoke<void>("sync_set_passphrase", { passphrase }),
   syncStatus: () =>
     invoke<{ dir: string; device: string | null; exported_at: string | null; phrases: number | null }>(
       "sync_status",

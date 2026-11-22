@@ -189,19 +189,8 @@ pub fn match_app_chord(
 /// Parse a hotkey string like "Control+Shift+Space" into (shift, ctrl, alt, meta, key).
 /// Returns None if the terminal key is missing or unrecognized.
 fn parse_chord(s: &str) -> Option<(bool, bool, bool, bool, Key)> {
-    let (mut sh, mut ct, mut al, mut me) = (false, false, false, false);
-    let mut key = None;
-    for raw in s.split('+') {
-        let part = raw.trim().to_lowercase();
-        match part.as_str() {
-            "control" | "ctrl" => ct = true,
-            "shift" => sh = true,
-            "alt" | "option" | "opt" => al = true,
-            "meta" | "super" | "win" | "cmd" | "command" => me = true,
-            other => key = name_to_rdev_key(other),
-        }
-    }
-    Some((sh, ct, al, me, key?))
+    let (sh, ct, al, me, name) = crate::hotkey::split_chord(s)?;
+    Some((sh, ct, al, me, name_to_rdev_key(&name)?))
 }
 
 fn clears_buffer(k: Key) -> bool {
@@ -228,7 +217,7 @@ fn clears_buffer(k: Key) -> bool {
 /// substring, case-insensitive). Returns false when the list is empty (fast path) or
 /// when the focused window can't be detected, so detection failures never silently
 /// disable the feature. Used by BOTH exclusion lists (spellcheck + autotext).
-fn title_excluded(
+pub(crate) fn title_excluded(
     current: &Mutex<Option<String>>,
     exclude: &Arc<Mutex<std::collections::HashSet<String>>>,
 ) -> bool {
@@ -397,66 +386,73 @@ pub struct AutotextHandle {
     pub running: Arc<AtomicBool>,
 }
 
+/// Shared state for the key listener: one named struct instead of a 22-argument
+/// `start()`. The same Arcs live in `AppState` (commands mutate them so toggles
+/// take effect live); the listener thread holds its own clones.
+pub struct ListenerShared {
+    pub db: Arc<Db>,
+    pub injector: Arc<dyn Injector>,
+    pub index: Arc<Mutex<AbbrevIndex>>,
+    pub enabled: Arc<AtomicBool>,
+    pub spellcheck: Arc<AtomicBool>,
+    pub case_adapt: Arc<AtomicBool>,
+    /// Opt-in sentence review: offer an AI grammar pass after sentence end.
+    pub review_sentence: Arc<AtomicBool>,
+    /// Monotonic keystroke counter — the async review skips showing the popup
+    /// when the user typed anything between trigger and AI response.
+    pub typed_counter: Arc<AtomicU64>,
+    pub current: Arc<Mutex<Option<String>>>,
+    pub ignore: Arc<Mutex<std::collections::HashSet<String>>>,
+    pub mode: Arc<Mutex<String>>,
+    pub learned: Arc<Mutex<HashMap<String, String>>>,
+    pub spellcheck_hotkey: Arc<Mutex<String>>,
+    pub exclude_apps: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Window-title substrings where expansion is fully disabled (global exclusion).
+    pub autotext_exclude: Arc<Mutex<std::collections::HashSet<String>>>,
+    pub delivery: Arc<Mutex<String>>,
+    pub injecting: Arc<AtomicBool>,
+    pub last_echo: Arc<Mutex<Option<std::time::Instant>>>,
+    pub offer: Arc<Mutex<Option<String>>>,
+    pub offer_candidates: Arc<Mutex<Vec<String>>>,
+    pub buffer_clear: Arc<AtomicBool>,
+    pub app_chords: Arc<Mutex<Vec<AppChord>>>,
+    pub app: tauri::AppHandle,
+}
+
 /// Spawn the global key listener. `enabled` is shared with the caller so toggling
 /// it (via settings) takes effect live. Blocks in its own thread via rdev::listen.
-#[allow(clippy::too_many_arguments)]
-pub fn start(
-    db: Arc<Db>,
-    injector: Arc<dyn Injector>,
-    index: Arc<Mutex<AbbrevIndex>>,
-    enabled: Arc<AtomicBool>,
-    spellcheck: Arc<AtomicBool>,
-    case_adapt: Arc<AtomicBool>,
-    // Opt-in sentence review: offer an AI grammar pass after sentence end.
-    review_sentence: Arc<AtomicBool>,
-    // Monotonic keystroke counter — the async review skips showing the popup
-    // when the user typed anything between trigger and AI response.
-    typed_counter: Arc<AtomicU64>,
-    current: Arc<Mutex<Option<String>>>,
-    ignore: Arc<Mutex<std::collections::HashSet<String>>>,
-    mode: Arc<Mutex<String>>,
-    learned: Arc<Mutex<HashMap<String, String>>>,
-    spellcheck_hotkey: Arc<Mutex<String>>,
-    exclude_apps: Arc<Mutex<std::collections::HashSet<String>>>,
-    // Window-title substrings where expansion is fully disabled (global exclusion).
-    autotext_exclude: Arc<Mutex<std::collections::HashSet<String>>>,
-    delivery: Arc<Mutex<String>>,
-    injecting: Arc<AtomicBool>,
-    last_echo: Arc<Mutex<Option<std::time::Instant>>>,
-    offer: Arc<Mutex<Option<String>>>,
-    offer_candidates: Arc<Mutex<Vec<String>>>,
-    buffer_clear: Arc<AtomicBool>,
-    app_chords: Arc<Mutex<Vec<AppChord>>>,
-    app: tauri::AppHandle,
-) -> AutotextHandle {
+pub fn start(shared: ListenerShared) -> AutotextHandle {
     let events_seen = Arc::new(AtomicU64::new(0));
     let running = Arc::new(AtomicBool::new(false));
 
-    let en = enabled;
-    let sc = spellcheck;
-    let ca = case_adapt;
-    let rv = review_sentence;
-    let tctr = typed_counter;
+    // Destructure to the short names the listener body has always used.
+    let ListenerShared {
+        db: database,
+        injector: inj,
+        index: idx,
+        enabled: en,
+        spellcheck: sc,
+        case_adapt: ca,
+        review_sentence: rv,
+        typed_counter: tctr,
+        current: cur,
+        ignore: ig,
+        mode: md,
+        learned: lrn,
+        spellcheck_hotkey: sk,
+        exclude_apps: ex,
+        autotext_exclude: atx_ex,
+        delivery: dl,
+        injecting: inj_flag,
+        last_echo: le,
+        offer: ofr,
+        offer_candidates: ocs,
+        buffer_clear: bcl,
+        app_chords: ach,
+        app: app_h,
+    } = shared;
     let seen = events_seen.clone();
     let run = running.clone();
-    let idx = index.clone();
-    let database = db.clone();
-    let inj = injector.clone();
-    let inj_flag = injecting.clone();
-    let app_h = app.clone();
-    let cur = current.clone();
-    let ig = ignore.clone();
-    let md = mode.clone();
-    let lrn = learned.clone();
-    let sk = spellcheck_hotkey.clone();
-    let ex = exclude_apps.clone();
-    let atx_ex = autotext_exclude.clone();
-    let dl = delivery.clone();
-    let ofr = offer.clone();
-    let ocs = offer_candidates.clone();
-    let bcl = buffer_clear.clone();
-    let ach = app_chords;
-    let le = last_echo;
 
     std::thread::spawn(move || {
         run.store(true, Ordering::Relaxed);
@@ -470,6 +466,10 @@ pub fn start(
         // 1.4 delimiter mode: a matched delayed abbreviation parked until the next
         // key is (or isn't) a delimiter. Single-threaded listener — plain local.
         let mut pending: Option<PendingMatch> = None;
+        // The spellcheck toggle chord, parsed once per settings change instead of on
+        // every keystroke with a modifier held.
+        type ParsedToggle = (String, Option<(bool, bool, bool, bool, Key)>);
+        let mut toggle_cache: Option<ParsedToggle> = None;
 
         let callback = move |event: Event| {
             seen.fetch_add(1, Ordering::Relaxed);
@@ -477,19 +477,25 @@ pub fn start(
             // timestamp each echo so the injection worker knows when they've drained.
             if inj_flag.load(Ordering::SeqCst) {
                 if let EventType::KeyPress(k) = event.event_type {
-                    crate::debug_log(&format!("suppressed (injecting): {k:?}"));
+                    if crate::debug_enabled() {
+                        crate::debug_log(&format!("suppressed (injecting): {k:?}"));
+                    }
                 }
                 if let Ok(mut t) = le.lock() {
                     *t = Some(std::time::Instant::now());
                 }
+                // Wake any quiet_clear worker sleeping out its echo gap.
+                crate::triggers::inject::notify_echo();
                 return;
             }
             match event.event_type {
                 EventType::KeyPress(key) => {
-                    crate::debug_log(&format!(
-                        "key {key:?} shift={shift} src={}",
-                        event.name.as_deref().unwrap_or("?")
-                    ));
+                    if crate::debug_enabled() {
+                        crate::debug_log(&format!(
+                            "key {key:?} shift={shift} src={}",
+                            event.name.as_deref().unwrap_or("?")
+                        ));
+                    }
                     // Buffer-clear handshake: an accepted offer-mode correction rewrote the
                     // screen out from under this thread-local buffer; drop it so the
                     // abbreviation / correction logic resyncs on the next real key. (Echoed
@@ -499,11 +505,18 @@ pub fn start(
                         buffer.clear();
                     }
                     // Detect the configurable spellcheck toggle hotkey (settings.spellcheck_hotkey).
-                    if shift || ctrl || alt || meta {
-                        if let Some((s, c, a, m, trigger)) =
-                            sk.lock().ok().and_then(|h| parse_chord(&h))
-                        {
-                            if key == trigger && shift == s && ctrl == c && alt == a && meta == m {
+                    if let Ok(h) = sk.lock() {
+                        if toggle_cache.as_ref().is_none_or(|(s, _)| s != &*h) {
+                            toggle_cache = Some((h.clone(), parse_chord(&h)));
+                        }
+                        if let Some((_, Some((s, c, a, m, trigger)))) = &toggle_cache {
+                            if (shift || ctrl || alt || meta)
+                                && key == *trigger
+                                && shift == *s
+                                && ctrl == *c
+                                && alt == *a
+                                && meta == *m
+                            {
                                 let new_val = !sc.load(Ordering::Relaxed);
                                 sc.store(new_val, Ordering::Relaxed);
                                 let _ = app_h.emit("spellcheck-toggled", new_val);
@@ -636,6 +649,7 @@ pub fn start(
                                 &p,
                                 None,
                                 &mut buffer,
+                                &idx,
                                 &database,
                                 &inj_flag,
                                 &le,
@@ -663,6 +677,7 @@ pub fn start(
                                         &p,
                                         Some(delim),
                                         &mut buffer,
+                                        &idx,
                                         &database,
                                         &inj_flag,
                                         &le,

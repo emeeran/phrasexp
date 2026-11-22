@@ -12,11 +12,15 @@
   // through ondecide → api.aiDecide.
   import { charDiff } from "./diff";
   import { splitAiOptions, type AiOption } from "./aiOptions";
+  import Icon from "../common/Icon.svelte";
   let {
     result,
     original = "",
     busy,
     streaming = false,
+    chips = [],
+    activeChip = null,
+    onchip,
     ondecide,
   }: {
     result: string;
@@ -25,6 +29,12 @@
     busy: boolean;
     /** True while tokens are still arriving — only Cancel is offered. */
     streaming?: boolean;
+    /** Quick re-run styles (first entry is "As-Is"): one tap re-runs the same
+     *  selection through another builtin while the popup stays up. */
+    chips?: { id: string; label: string }[];
+    /** The action id that produced the CURRENT result — the highlighted chip. */
+    activeChip?: string | null;
+    onchip?: (actionId: string) => void;
     ondecide: (d: "replace" | "insert" | "copy" | "retry" | "discard", text?: string) => void;
   } = $props();
 
@@ -83,7 +93,8 @@
 
 <div class="col" style="gap:6px; flex:1; min-height:0">
   <div class="head" data-tauri-drag-region>
-    <span class="caption" data-tauri-drag-region>
+    <span class="headtitle" data-tauri-drag-region>
+      <Icon name="ai" size={13} />
       {#if streaming}
         Generating…
       {:else if options.length > 1}
@@ -94,13 +105,24 @@
     </span>
     {#if canDiff && !streaming}
       <button
-        class="back caption"
+        class="toggle"
         class:on={showDiff}
         disabled={busy}
         onclick={() => (showDiff = !showDiff)}
         title="Show what changed against the original selection"
-      >diff</button>
+      >
+        <Icon name="eye" size={12} /> diff
+      </button>
     {/if}
+    <button
+      class="close"
+      disabled={busy && !streaming}
+      aria-label="Discard"
+      title="Discard — keep your original text (Esc)"
+      onclick={() => ondecide("discard")}
+    >
+      <Icon name="close" size={14} />
+    </button>
   </div>
   {#if options.length > 1 && picked === null && !streaming}
     <div class="opts">
@@ -159,27 +181,42 @@
       </div>
     {:else}
       <!-- aria-live: streaming deltas + picks are announced, not silent. -->
-      <div class="result" role="status" aria-live="polite">{chosen}</div>
+      <div class="result" class:streaming role="status" aria-live="polite">{chosen}</div>
     {/if}
+  {/if}
+  {#if !streaming && chips.length > 0}
+    <div class="chips">
+      {#each chips as c (c.id)}
+        <button
+          class="chip"
+          class:on={c.id === activeChip}
+          disabled={busy}
+          title="Re-run the selection in this style — the result swaps in place"
+          onclick={() => onchip?.(c.id)}
+        >
+          {c.label}
+        </button>
+      {/each}
+    </div>
   {/if}
   <div class="choices">
     {#if streaming}
-      <button class="choice danger" onclick={() => ondecide("discard")}>
-        Cancel <span class="key">Esc</span>
+      <button class="choice cancel" onclick={() => ondecide("discard")}>
+        <Icon name="close" size={12} /> Cancel <span class="key">Esc</span>
       </button>
     {:else}
       <button
         class="choice primary"
         disabled={busy || needsPick}
-        title={needsPick ? noPickHint : ""}
+        title={needsPick ? noPickHint : "Paste over the selected text"}
         onclick={() => ondecide("replace", chosen)}
       >
-        Replace <span class="key">Enter</span>
+        Replace <span class="key onprimary">Enter</span>
       </button>
       <button
         class="choice"
         disabled={busy || needsPick}
-        title={needsPick ? noPickHint : ""}
+        title={needsPick ? noPickHint : "Paste after the selection, keeping the original"}
         onclick={() => ondecide("insert", chosen)}
       >
         Insert <span class="key">I</span>
@@ -192,28 +229,81 @@
       >
         Copy <span class="key">C</span>
       </button>
-      <button class="choice" disabled={busy} onclick={() => ondecide("retry")}>
+      <button class="choice" disabled={busy} title="Run the same style again" onclick={() => ondecide("retry")}>
         Retry <span class="key">R</span>
-      </button>
-      <button class="choice danger" disabled={busy} onclick={() => ondecide("discard")}>
-        Discard <span class="key">Esc</span>
       </button>
     {/if}
   </div>
   {#if busy && !streaming}
-    <div class="caption" style="padding:0 2px">Working…</div>
+    <div class="working" role="status">Working<span class="dots"><i></i><i></i><i></i></span></div>
   {/if}
 </div>
 
 <style>
   .head {
-    padding: 2px 2px 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 2px 4px;
     border-bottom: 1px solid var(--border-soft);
     cursor: grab;
     user-select: none;
   }
   .head:active {
     cursor: grabbing;
+  }
+  .headtitle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--accent);
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px;
+    font-size: var(--fs-xs);
+    background: none;
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-xs);
+    color: var(--text-faint);
+    transition: color 150ms, border-color 150ms, background-color 150ms;
+  }
+  .toggle:hover:not(:disabled) {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .toggle.on {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    flex: none;
+    background: none;
+    border: none;
+    border-radius: var(--radius-xs);
+    color: var(--text-faint);
+    transition: color 150ms, background-color 150ms;
+  }
+  .close:hover:not(:disabled) {
+    color: var(--danger);
+    background: var(--danger-soft);
   }
   .result {
     flex: 1;
@@ -226,6 +316,15 @@
     padding: 8px;
     font-size: var(--fs-base);
     line-height: 1.45;
+  }
+  /* Streaming affordance: a soft pulsing edge light instead of a static box. */
+  .result.streaming {
+    border-color: var(--accent);
+    animation: breathe 1.4s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% { border-color: var(--accent); }
+    50% { border-color: var(--border-soft); }
   }
   .opts {
     flex: 1;
@@ -290,21 +389,6 @@
     border-color: var(--accent);
     background: var(--accent-soft);
   }
-  .back {
-    background: none;
-    border: none;
-    color: var(--text-faint);
-    text-align: left;
-    padding: 0 2px;
-    cursor: pointer;
-  }
-  .back:hover:not(:disabled) {
-    color: var(--accent);
-  }
-  .back.on {
-    color: var(--accent);
-    font-weight: 500;
-  }
   .result.diff .old {
     display: block;
     margin-bottom: 6px;
@@ -320,6 +404,35 @@
     text-decoration: none;
     font-weight: 500;
   }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    flex: none;
+  }
+  .chip {
+    padding: 2px 10px;
+    font-size: var(--fs-base);
+    background: var(--surface-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-xs);
+    color: var(--text-dim);
+    transition: color 150ms, border-color 150ms, background-color 150ms;
+  }
+  .chip:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .chip.on {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .chip:disabled {
+    opacity: 0.5;
+    cursor: wait;
+  }
   .choices {
     display: flex;
     gap: 6px;
@@ -333,6 +446,16 @@
     gap: 6px;
     padding: 7px 6px;
     font-size: var(--fs-base);
+    transition: filter 150ms, background-color 150ms, border-color 150ms;
+  }
+  .choice.cancel {
+    flex: 1;
+    background: var(--danger-soft);
+    border-color: transparent;
+    color: var(--danger);
+  }
+  .choice.cancel:hover:not(:disabled) {
+    border-color: var(--danger);
   }
   .key {
     font-size: var(--fs-xs);
@@ -340,5 +463,45 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-xs);
     padding: 0 4px;
+  }
+  .key.onprimary {
+    color: var(--accent-contrast);
+    border-color: rgba(255, 255, 255, 0.4);
+  }
+  .working {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 2px;
+    font-size: var(--fs-xs);
+    color: var(--text-faint);
+  }
+  .working .dots {
+    display: inline-flex;
+    gap: 3px;
+    margin-left: 4px;
+  }
+  .working .dots i {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--text-faint);
+    animation: hop 1.2s ease-in-out infinite;
+  }
+  .working .dots i:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+  .working .dots i:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+  @keyframes hop {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+    30% { transform: translateY(-3px); opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .result.streaming,
+    .working .dots i {
+      animation: none;
+    }
   }
 </style>

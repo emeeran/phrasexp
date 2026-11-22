@@ -14,29 +14,39 @@ use super::spellcheck::{
     weighted_damerau_levenshtein, SymSpell, SYMSPELL_MAX_EDIT,
 };
 
-/// Longest literal abbreviation the buffer ends with, scanned over the literal
-/// table. `delayed_only` selects the scan side: `true` matches only delayed
-/// (delimiter-mode) abbreviations, `false` only the immediate ones. Shared by
-/// `match_suffix`/`match_delayed`, which differ in nothing else.
+/// Longest literal abbreviation the buffer ends with. O(max-abbreviation-length)
+/// hash lookups instead of a scan over the whole table: candidate suffix lengths
+/// are walked longest→shortest and each candidate slice is a single `HashMap` hit,
+/// so the first match IS the longest (the old linear scan's tie-break becomes
+/// unreachable — keys are unique per length). `delayed_only` selects the scan side:
+/// `true` matches only delayed (delimiter-mode) abbreviations, `false` only the
+/// immediate ones. Shared by `match_suffix`/`match_delayed`.
+/// `len_bounds` = (min, max) literal abbreviation lengths in bytes — both 0 when
+/// the table is empty (the loop then never runs).
 fn best_literal_suffix<'a>(
     literals: &'a HashMap<String, Vec<String>>,
     delayed: &std::collections::HashSet<String>,
+    len_bounds: (usize, usize),
     buffer: &str,
     delayed_only: bool,
 ) -> Option<(&'a str, &'a Vec<String>)> {
-    let mut best: Option<(&str, &Vec<String>)> = None;
-    for (abbr, ids) in literals {
-        if delayed.contains(abbr) != delayed_only {
-            continue;
-        }
-        if buffer.ends_with(abbr.as_str()) {
-            match best {
-                Some((b, _)) if b.len() >= abbr.len() => {}
-                _ => best = Some((abbr.as_str(), ids)),
+    let (min_len, max_len) = len_bounds;
+    if min_len == 0 || buffer.len() < min_len {
+        return None;
+    }
+    let mut len = max_len.min(buffer.len());
+    while len >= min_len {
+        // Byte slices must land on char boundaries — skip lengths that don't.
+        if buffer.is_char_boundary(buffer.len() - len) {
+            if let Some((abbr, ids)) = literals.get_key_value(&buffer[buffer.len() - len..]) {
+                if delayed.contains(abbr) == delayed_only {
+                    return Some((abbr.as_str(), ids));
+                }
             }
         }
+        len -= 1;
     }
-    best
+    None
 }
 
 /// abbreviation -> phrase_ids. Literals are suffix-matched; regexes are pattern-matched
@@ -50,17 +60,27 @@ fn best_literal_suffix<'a>(
 /// cleanly without storing every form.
 pub struct AbbrevIndex {
     literals: HashMap<String, Vec<String>>,
+    /// (min, max) literal abbreviation length in bytes — bounds the suffix-walk
+    /// window in `best_literal_suffix`. Both 0 when `literals` is empty.
+    literal_len_bounds: (usize, usize),
+    literal_lower: std::collections::HashSet<String>,
     /// Literal abbreviations configured to fire only after a delimiter (1.4).
     /// They are excluded from immediate matching; the listener parks them as
     /// pending and fires on the delimiter key.
     delayed: std::collections::HashSet<String>,
     regexes: Vec<(regex::Regex, String)>,
     phrase_syms: SymSpell,
-    phrase_soundex: HashMap<String, Vec<String>>,
+    /// soundex code → indices into `phrase_syms.words` (no duplicated strings).
+    phrase_soundex: HashMap<String, Vec<u32>>,
     /// (prev, next) pairs attested in the user's phrase bodies — a tiny, private bigram
     /// model for context-aware candidate ranking (item: "a ___" should favour "lot"
     /// over "lit"). Rebuilt with the phrase vocab on phrase edits.
     phrase_bigrams: std::collections::HashSet<(String, String)>,
+    /// Parsed phrases by id, populated at rebuild — expansion reads from here instead
+    /// of a per-use `get_phrase` DB round-trip + JSON parse/decrypt. Sensitive phrases
+    /// are deliberately NOT cached: at-rest encryption should mean their bodies aren't
+    /// resident while idle, so they take the DB path per expansion.
+    phrase_cache: HashMap<String, std::sync::Arc<Phrase>>,
 }
 
 impl AbbrevIndex {
@@ -68,10 +88,16 @@ impl AbbrevIndex {
         let mut literals: HashMap<String, Vec<String>> = HashMap::new();
         let mut regexes: Vec<(regex::Regex, String)> = Vec::new();
         let mut phrase_syms = SymSpell::new(SYMSPELL_MAX_EDIT);
-        let mut phrase_soundex: HashMap<String, Vec<String>> = HashMap::new();
+        let mut phrase_soundex: HashMap<String, Vec<u32>> = HashMap::new();
         let mut phrase_bigrams: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
         let mut delayed_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut phrase_cache: HashMap<String, std::sync::Arc<Phrase>> = HashMap::new();
+        // Lowercased abbreviation set — the spellcheck "never correct an abbreviation"
+        // guard is a single `contains` instead of a per-keystroke scan with an
+        // allocation per abbreviation.
+        let mut literal_lower: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for p in phrases {
             let is_regex = p
                 .triggers
@@ -86,12 +112,16 @@ impl AbbrevIndex {
             if abbr.is_empty() {
                 continue;
             }
+            if !p.sensitive {
+                phrase_cache.insert(p.id.clone(), std::sync::Arc::new(p.clone()));
+            }
             if is_regex {
                 if let Ok(re) = regex::Regex::new(abbr) {
                     regexes.push((re, p.id.clone()));
                 }
             } else {
                 literals.entry(abbr.clone()).or_default().push(p.id.clone());
+                literal_lower.insert(abbr.to_lowercase());
                 if delayed {
                     delayed_set.insert(abbr.clone());
                 }
@@ -117,11 +147,11 @@ impl AbbrevIndex {
                         if w.chars().count() < 3 || !w.chars().all(|c| c.is_alphabetic()) {
                             continue;
                         }
-                        phrase_syms.add(&w);
+                        let widx = phrase_syms.add(&w);
                         for infl in inflections(&w) {
                             phrase_syms.add(&infl);
                         }
-                        phrase_soundex.entry(soundex(&w)).or_default().push(w);
+                        phrase_soundex.entry(soundex(&w)).or_default().push(widx);
                     }
                     for pair in tokens.windows(2) {
                         let a = pair[0].to_lowercase();
@@ -133,14 +163,32 @@ impl AbbrevIndex {
                 }
             }
         }
+        // Bulk vocab load done: compact the delete index into the flat layout.
+        phrase_syms.freeze();
+        let literal_len_bounds = match literals.keys().map(|k| k.len()).max() {
+            Some(max) => (
+                literals.keys().map(|k| k.len()).min().unwrap_or(max),
+                max,
+            ),
+            None => (0, 0),
+        };
         Self {
             literals,
+            literal_len_bounds,
+            literal_lower,
             delayed: delayed_set,
             regexes,
             phrase_syms,
             phrase_soundex,
             phrase_bigrams,
+            phrase_cache,
         }
+    }
+
+    /// The parsed phrase for `id`, from the rebuild-time cache (non-sensitive
+    /// phrases only — see the field docs). `None` falls back to the DB path.
+    pub fn cached_phrase(&self, id: &str) -> Option<std::sync::Arc<Phrase>> {
+        self.phrase_cache.get(id).cloned()
     }
 
     pub fn len(&self) -> usize {
@@ -150,8 +198,14 @@ impl AbbrevIndex {
     /// 1.4 delimiter mode: find the longest DELAYED abbreviation the buffer ends with.
     /// Returns (abbr, ids) like match_suffix, but only over the delayed set.
     pub fn match_delayed(&self, buffer: &str) -> Option<(String, Vec<String>)> {
-        best_literal_suffix(&self.literals, &self.delayed, buffer, true)
-            .map(|(a, ids)| (a.to_string(), ids.clone()))
+        best_literal_suffix(
+            &self.literals,
+            &self.delayed,
+            self.literal_len_bounds,
+            buffer,
+            true,
+        )
+        .map(|(a, ids)| (a.to_string(), ids.clone()))
     }
 
     /// Wrapper that reads the aggressiveness mode and returns the single best correction.
@@ -225,11 +279,7 @@ impl AbbrevIndex {
             return Vec::new();
         }
         // Never "correct" a registered abbreviation (it's a deliberate trigger).
-        if self
-            .literals
-            .keys()
-            .any(|abbr| abbr.to_lowercase() == lower)
-        {
+        if self.literal_lower.contains(&lower) {
             return Vec::new();
         }
         let word_len = lower.chars().count();
@@ -250,12 +300,15 @@ impl AbbrevIndex {
         }
 
         // Phonetic fallback: only when edit distance found nothing and the word is long
-        // enough that a Soundex match is meaningful.
+        // enough that a Soundex match is meaningful. Soundex buckets hold indices into
+        // the respective SymSpell word vectors (no duplicated strings).
         if candidates.is_empty() && word_len >= soundex_min_len {
             let target = soundex(&lower);
             if !target.is_empty() {
-                if let Some(list) = baseline_index().soundex.get(&target) {
-                    for w in list {
+                let baseline = baseline_index();
+                if let Some(list) = baseline.soundex.get(&target) {
+                    for &i in list {
+                        let w = &baseline.syms.words[i as usize];
                         let d = damerau_levenshtein(&lower, w);
                         if d <= soundex_max_dist {
                             candidates.push((d, w.clone(), false));
@@ -263,7 +316,8 @@ impl AbbrevIndex {
                     }
                 }
                 if let Some(list) = self.phrase_soundex.get(&target) {
-                    for w in list {
+                    for &i in list {
+                        let w = &self.phrase_syms.words[i as usize];
                         let d = damerau_levenshtein(&lower, w);
                         if d <= soundex_max_dist {
                             candidates.push((d, w.clone(), true));
@@ -355,7 +409,13 @@ impl AbbrevIndex {
 
     /// Longest literal suffix first, then regexes. Returns (text to erase, candidate ids).
     pub fn match_suffix(&self, buffer: &str) -> Option<(String, Vec<String>)> {
-        if let Some((a, ids)) = best_literal_suffix(&self.literals, &self.delayed, buffer, false) {
+        if let Some((a, ids)) = best_literal_suffix(
+            &self.literals,
+            &self.delayed,
+            self.literal_len_bounds,
+            buffer,
+            false,
+        ) {
             return Some((a.to_string(), ids.clone()));
         }
 
@@ -379,10 +439,25 @@ impl AbbrevIndex {
 }
 
 /// The text of the last regex match that ends at the buffer's end, if any.
+/// Only the tail window is scanned: a trigger match must END at the buffer's
+/// end, so its start can't be older than the longest plausible trigger text —
+/// scanning the whole buffer per keystroke (the old `find_iter`) cost O(len)
+/// for nothing. The window comfortably covers any typed trigger; longer
+/// matches (pathological patterns) simply stop matching.
+const REGEX_WINDOW: usize = 256;
+
 fn regex_suffix_match(re: &regex::Regex, buffer: &str) -> Option<String> {
+    // Smallest char-boundary index whose window stays inside REGEX_WINDOW bytes.
+    let cutoff = buffer.len().saturating_sub(REGEX_WINDOW);
+    let start = buffer
+        .char_indices()
+        .find(|(i, _)| *i >= cutoff)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let window = &buffer[start..];
     let mut found = None;
-    for m in re.find_iter(buffer) {
-        if m.end() == buffer.len() {
+    for m in re.find_iter(window) {
+        if m.end() == window.len() {
             found = Some(m.as_str().to_string());
         }
     }
@@ -822,13 +897,28 @@ mod tests {
     #[test]
     #[ignore = "diagnostic: run with --nocapture to see baseline index sizes for memory budgeting"]
     fn baseline_index_sizes() {
+        // RSS before vs after the build isolates the index's footprint.
+        fn rss_kb() -> u64 {
+            std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("VmRSS:"))
+                        .and_then(|l| l.split_whitespace().nth(1))
+                        .and_then(|n| n.parse().ok())
+                })
+                .unwrap_or(0)
+        }
+        let before = rss_kb();
         let b = baseline_index();
+        let after = rss_kb();
         eprintln!(
-            "baseline index: words={} deletes={} soundex_buckets={} extra={}",
+            "baseline index: words={} deletes_keys={} soundex_buckets={} extra={} rss_before={before}kB rss_after={after}kB index_rss≈{}kB",
             b.syms.words.len(),
-            b.syms.deletes.len(),
+            b.syms.delete_key_count(),
             b.soundex.len(),
             b.extra.len(),
+            after.saturating_sub(before),
         );
     }
 
@@ -879,6 +969,40 @@ mod tests {
             );
         }
         eprintln!("top-1 accuracy: {}/{}", hits, cases.len());
+    }
+
+    #[test]
+    fn suffix_match_stays_cheap_at_library_scale() {
+        // Hot-path regression guard: matching must not scale linearly with the
+        // abbreviation count (the old `best_literal_suffix` scanned the whole table
+        // TWICE per keystroke). Build a 5,000-abbreviation index, match a buffer that
+        // hits nothing, and require the whole sweep to finish well under a generous
+        // bound — an O(n) regression blows past it, an O(suffix) scan doesn't notice.
+        let phrases: Vec<Phrase> = (0..5_000)
+            .map(|i| {
+                phrase(
+                    &format!("p{i}"),
+                    Some(&format!("zzabbr{i:04}")),
+                    vec![Segment::Text { text: "x".into() }],
+                )
+            })
+            .collect();
+        let idx = AbbrevIndex::from_phrases(&phrases);
+        let start = std::time::Instant::now();
+        let iterations = 2_000;
+        for i in 0..iterations {
+            let buffer = format!("the quick brown fox jumps {i}");
+            assert!(idx.match_suffix(&buffer).is_none());
+        }
+        let elapsed = start.elapsed();
+        // ~2 µs/lookup leaves >20× headroom on typical hardware; the linear scan over
+        // 5,000 abbreviations measured an order of magnitude slower per keystroke.
+        assert!(
+            elapsed < std::time::Duration::from_millis(iterations * 2 / 1000 + 20),
+            "suffix matching regressed: {iterations} lookups took {elapsed:?}"
+        );
+        // A real match still resolves through the same path.
+        assert_eq!(idx.match_suffix("hello zzabbr1234").unwrap().0, "zzabbr1234");
     }
 
     #[test]

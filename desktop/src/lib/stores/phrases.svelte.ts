@@ -16,9 +16,12 @@ export const phrasesStore = $state({
   async load() {
     this.loading = true;
     try {
+      // The query is NOT sent server-side: list loads the folder and the client-side
+      // rankPhrases (recomputed per keystroke from `query`) does the matching — one
+      // IPC per folder/sort change instead of one per keystroke typed.
       this.items = await api.listPhrases(
         this.selectedFolderId,
-        this.query.trim() || undefined,
+        undefined,
         false,
         this.sort,
       );

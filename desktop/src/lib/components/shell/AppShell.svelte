@@ -51,6 +51,36 @@
     }
   }
 
+  // Never-used review (usage stats): per-row + bulk delete of cleanup candidates.
+  let unusedBusy = $state(false);
+  async function deleteUnused(phraseId: string, name: string) {
+    if (!confirm(`Delete phrase "${name}"?`)) return;
+    try {
+      await api.deletePhrase(phraseId);
+      app.unusedPhrases = app.unusedPhrases.filter((p) => p.id !== phraseId);
+      toast(`Phrase "${name}" deleted`, "ok");
+      await Promise.all([phrasesStore.load(), foldersStore.load()]);
+    } catch (e) {
+      toast(errMsg(e), "err");
+    }
+  }
+  async function deleteAllUnused() {
+    const n = app.unusedPhrases.length;
+    if (n === 0 || unusedBusy) return;
+    if (!confirm(`Delete ${n} never-used phrase${n === 1 ? "" : "s"}?\n\nThis cannot be undone.`)) return;
+    unusedBusy = true;
+    try {
+      for (const p of app.unusedPhrases) await api.deletePhrase(p.id);
+      app.unusedPhrases = [];
+      toast(`Deleted ${n} never-used phrase${n === 1 ? "" : "s"}`, "ok");
+      await Promise.all([phrasesStore.load(), foldersStore.load()]);
+    } catch (e) {
+      toast(errMsg(e), "err");
+    } finally {
+      unusedBusy = false;
+    }
+  }
+
   // Bulk cleanup: delete every phrase except the first-listed of each group.
   let dupesBusy = $state(false);
 
@@ -168,6 +198,33 @@
             </button>
           </div>
         {/each}
+      </div>
+    {/each}
+  </Modal>
+{/if}
+
+{#if app.modal === "unused"}
+  <Modal open title={`Never-used phrases (${app.unusedPhrases.length})`} onclose={() => (app.modal = null)}>
+    <p class="faint" style="margin-top:0">
+      Created but never expanded — likely abandoned tests or imports. Deleting is permanent.
+    </p>
+    {#if app.unusedPhrases.length > 1}
+      <div class="row modal-head" style="justify-content:flex-end">
+        <button class="tiny danger" disabled={unusedBusy} onclick={deleteAllUnused}>
+          {unusedBusy ? "Deleting…" : `🗑 Delete all (${app.unusedPhrases.length})`}
+        </button>
+      </div>
+    {/if}
+    {#each app.unusedPhrases as p (p.id)}
+      <div class="dup-item">
+        <span class="dup-text">
+          <strong>{p.name}</strong>
+          {#if p.abbreviation}<span class="faint"> — {p.abbreviation}</span>{/if}
+          <span class="faint"> — {p.content_preview}</span>
+        </span>
+        <button class="tiny danger ghost" title="Delete this phrase" disabled={unusedBusy} onclick={() => deleteUnused(p.id, p.name)}>
+          <Icon name="trash" size={13} />
+        </button>
       </div>
     {/each}
   </Modal>

@@ -51,7 +51,7 @@ pub fn start(
                     let entry = ClipboardEntry {
                         id: uuid::Uuid::new_v4().to_string(),
                         text,
-                        captured_at: chrono::Utc::now().to_rfc3339(),
+                        captured_at: crate::domain::now_iso(),
                     };
                     let _ = db.add_clipboard(&entry, cap);
                 }

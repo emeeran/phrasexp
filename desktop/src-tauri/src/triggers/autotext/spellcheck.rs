@@ -65,24 +65,25 @@ pub(super) fn weighted_damerau_levenshtein(a: &str, b: &str) -> f32 {
             (0.6 + key_distance(x, y) * 0.2).min(1.4)
         }
     };
-    let mut dp = vec![vec![0f32; n + 1]; m + 1];
-    for (i, row) in dp.iter_mut().enumerate() {
-        row[0] = i as f32;
-    }
-    for j in 0..=n {
-        dp[0][j] = j as f32;
-    }
+    // Three rolling rows suffice: the recurrence reads row i-1 and (for
+    // transpositions) i-2 — no full (m+1)×(n+1) matrix per candidate.
+    let mut prev2 = vec![0f32; n + 1];
+    let mut prev1: Vec<f32> = (0..=n).map(|j| j as f32).collect();
+    let mut cur = vec![0f32; n + 1];
     for i in 1..=m {
+        cur[0] = i as f32;
         for j in 1..=n {
-            dp[i][j] = (dp[i - 1][j] + 1.0)
-                .min(dp[i][j - 1] + 1.0)
-                .min(dp[i - 1][j - 1] + sub_cost(a[i - 1], b[j - 1]));
+            cur[j] = (prev1[j] + 1.0)
+                .min(cur[j - 1] + 1.0)
+                .min(prev1[j - 1] + sub_cost(a[i - 1], b[j - 1]));
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                dp[i][j] = dp[i][j].min(dp[i - 2][j - 2] + 1.0);
+                cur[j] = cur[j].min(prev2[j - 2] + 1.0);
             }
         }
+        std::mem::swap(&mut prev2, &mut prev1);
+        std::mem::swap(&mut prev1, &mut cur);
     }
-    dp[m][n]
+    prev1[n]
 }
 
 /// Tier 1: Apply the original word's case pattern to the correction.
@@ -160,26 +161,26 @@ pub(super) fn damerau_levenshtein(a: &str, b: &str) -> usize {
     if n == 0 {
         return m;
     }
-    let mut dp = vec![vec![0usize; n + 1]; m + 1];
-    for i in 0..=m {
-        dp[i][0] = i;
-    }
-    for j in 0..=n {
-        dp[0][j] = j;
-    }
+    // Three rolling rows (see `weighted_damerau_levenshtein`).
+    let mut prev2 = vec![0usize; n + 1];
+    let mut prev1: Vec<usize> = (0..=n).collect();
+    let mut cur = vec![0usize; n + 1];
     for i in 1..=m {
+        cur[0] = i;
         for j in 1..=n {
             let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            dp[i][j] = (dp[i - 1][j] + 1)
-                .min(dp[i][j - 1] + 1)
-                .min(dp[i - 1][j - 1] + cost);
+            cur[j] = (prev1[j] + 1)
+                .min(cur[j - 1] + 1)
+                .min(prev1[j - 1] + cost);
             // Adjacent transposition: a[i-1]↔a[i-2] matches b[j-1]↔b[j-2]
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                dp[i][j] = dp[i][j].min(dp[i - 2][j - 2] + 1);
+                cur[j] = cur[j].min(prev2[j - 2] + 1);
             }
         }
+        std::mem::swap(&mut prev2, &mut prev1);
+        std::mem::swap(&mut prev1, &mut cur);
     }
-    dp[m][n]
+    prev1[n]
 }
 
 /// Bundled English dictionary — tier 1 (25K words, ASCII letters, internal `'`/`-`, ≥3
@@ -204,7 +205,8 @@ pub(super) struct BaselineIndex {
     pub(super) syms: SymSpell,
     /// tier-2 membership vocabulary (no deletes index — memory cap).
     pub(super) extra: std::collections::HashSet<String>,
-    pub(super) soundex: HashMap<String, Vec<String>>,
+    /// soundex code → indices into `syms.words` (no duplicated word strings).
+    pub(super) soundex: HashMap<String, Vec<u32>>,
 }
 
 pub(super) fn baseline_index() -> &'static BaselineIndex {
@@ -213,17 +215,14 @@ pub(super) fn baseline_index() -> &'static BaselineIndex {
     IDX.get_or_init(|| {
         let mut syms = SymSpell::new(SYMSPELL_MAX_EDIT);
         let mut extra: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut soundex_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut soundex_map: HashMap<String, Vec<u32>> = HashMap::new();
         for word in EMBEDDED_DICT.lines() {
             let w = word.trim();
             if w.is_empty() {
                 continue;
             }
-            syms.add(w);
-            soundex_map
-                .entry(soundex(w))
-                .or_default()
-                .push(w.to_string());
+            let idx = syms.add(w);
+            soundex_map.entry(soundex(w)).or_default().push(idx);
         }
         for word in EMBEDDED_DICT_EXTRA.lines() {
             let w = word.trim();
@@ -231,6 +230,8 @@ pub(super) fn baseline_index() -> &'static BaselineIndex {
                 extra.insert(w.to_string());
             }
         }
+        // Bulk load done: compact the delete index into the flat layout.
+        syms.freeze();
         BaselineIndex {
             syms,
             extra,
@@ -305,14 +306,57 @@ pub(super) fn common_bigram(prev: &str, next: &str) -> bool {
 // turns fuzzy search into hash lookups (no per-word distance scan across the whole
 // dictionary), and the user vocabulary can be added incrementally without a full rebuild.
 // --------------------------------------------------------------------------- //
+
+/// FNV-1a 64-bit — the delete-map key. Delete strings are only ever
+/// exact-looked-up (never recovered or enumerated), so the map stores the 8-byte
+/// hash instead of the string — ~100 MB → tens of MB at dictionary scale. A hash
+/// collision merely merges two key lists, and every candidate is verified with
+/// true Damerau-Levenshtein below, so a collision cannot surface a wrong word.
+fn delete_key_hash(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
 pub(super) struct SymSpell {
     max_edit: usize,
     pub(super) words: Vec<String>,
     /// word → frequency rank (insertion order index). Replaces the old HashSet `set` —
     /// membership and rank in one map, same order of memory.
     rank: HashMap<String, u32>,
-    /// delete-string → indices into `words` that produce it.
-    pub(super) deletes: HashMap<String, Vec<u32>>,
+    /// Build state: flat (delete-hash, word index) pairs accumulated by `add`.
+    /// Flat ON PURPOSE — the old per-key `HashMap<u64, Vec<u32>>` peaked at
+    /// ~100 MB RSS for the 25K-word dictionary because glibc never returns the
+    /// freed intermediate to the OS. Pairs sort in place and emit the frozen
+    /// layout; no fat intermediate map ever exists.
+    pending: Vec<(u64, u32)>,
+    /// Frozen lookup structure (see `FrozenDeletes`), built by `freeze()`.
+    /// `add` after a freeze re-accumulates into `pending` until the next freeze.
+    frozen: Option<FrozenDeletes>,
+}
+
+/// Flattened delete index. `table` is sorted by hash for binary search; each row
+/// points into the concatenated `entries` vector. Hash collisions (and merges of
+/// a re-freeze) yield a covering span — safe, because candidates are deduped and
+/// true-distance-verified in `lookup`, so a wider span can only add verified hits.
+struct FrozenDeletes {
+    entries: Vec<u32>,
+    table: Vec<(u64, u32, u32)>, // (hash, start, len), sorted by hash
+}
+
+impl FrozenDeletes {
+    fn idxs(&self, hash: u64) -> &[u32] {
+        match self.table.binary_search_by_key(&hash, |r| r.0) {
+            Ok(i) => {
+                let (s, l) = (self.table[i].1, self.table[i].2);
+                &self.entries[s as usize..(s + l) as usize]
+            }
+            Err(_) => &[],
+        }
+    }
 }
 
 impl SymSpell {
@@ -321,12 +365,20 @@ impl SymSpell {
             max_edit,
             words: Vec::new(),
             rank: HashMap::new(),
-            deletes: HashMap::new(),
+            pending: Vec::new(),
+            frozen: None,
         }
     }
 
     pub(super) fn contains(&self, word: &str) -> bool {
         self.rank.contains_key(word)
+    }
+
+    /// Distinct delete keys in the frozen table (diagnostics; test-only — the
+    /// shipped app never inspects the index shape).
+    #[cfg(test)]
+    pub(super) fn delete_key_count(&self) -> usize {
+        self.frozen.as_ref().map(|f| f.table.len()).unwrap_or(0)
     }
 
     /// Frequency rank of an indexed word (lower = more frequent; insertion order for the
@@ -337,23 +389,85 @@ impl SymSpell {
 
     /// Index a word (idempotent). Records all symmetric deletes up to `max_edit`.
     /// Callers loading a frequency-sorted list should preserve its order — insertion
-    /// index doubles as the rank returned by `rank_of`.
-    pub(super) fn add(&mut self, word: &str) {
+    /// index doubles as the rank returned by `rank_of`. Returns the word's index
+    /// (existing words return their established index), so Soundex buckets can
+    /// reference words by position instead of duplicating the strings.
+    pub(super) fn add(&mut self, word: &str) -> u32 {
         let w = word.to_lowercase();
-        if self.rank.contains_key(&w) {
-            return;
+        if let Some(&idx) = self.rank.get(&w) {
+            return idx;
         }
         let idx = self.words.len() as u32;
         self.words.push(w.clone());
         self.rank.insert(w.clone(), idx);
-        for del in deletes_of(&w, self.max_edit) {
-            self.deletes.entry(del).or_default().push(idx);
+        self.pending.extend(
+            deletes_of(&w, self.max_edit)
+                .into_iter()
+                .map(|d| (delete_key_hash(&d), idx)),
+        );
+        idx
+    }
+
+    /// Compact `pending` into the frozen flat layout. Call once after bulk
+    /// loading (dictionary load, index rebuild); later `add`s accumulate until
+    /// the next freeze — nothing in the app adds after freezing.
+    pub(super) fn freeze(&mut self) {
+        if self.pending.is_empty() {
+            return;
         }
+        let mut frozen = self.frozen.take().unwrap_or(FrozenDeletes {
+            entries: Vec::new(),
+            table: Vec::new(),
+        });
+        // Sort the new pairs by hash, then walk the runs, emitting one entries
+        // span per distinct hash. In-place sort of a flat vector — no per-key
+        // allocation, so build peak ≈ final size.
+        self.pending.sort_unstable_by_key(|&(h, _)| h);
+        let pairs = std::mem::take(&mut self.pending);
+        let mut run_start: Option<u32> = None;
+        let mut run_hash = 0u64;
+        for (h, i) in pairs {
+            if run_start.is_none() || run_hash != h {
+                if let Some(start) = run_start {
+                    let len = frozen.entries.len() as u32 - start;
+                    frozen.table.push((run_hash, start, len));
+                }
+                run_start = Some(frozen.entries.len() as u32);
+                run_hash = h;
+            }
+            frozen.entries.push(i);
+        }
+        if let Some(start) = run_start {
+            let len = frozen.entries.len() as u32 - start;
+            frozen.table.push((run_hash, start, len));
+        }
+        // Fold the new rows into any previous freeze (the app never adds after
+        // freezing; this exists for API completeness) by merging duplicate-hash
+        // rows into covering spans (see FrozenDeletes docs).
+        if !frozen.table.is_empty() {
+            frozen.table.sort_unstable_by_key(|r| r.0);
+            let mut merged: Vec<(u64, u32, u32)> = Vec::with_capacity(frozen.table.len());
+            for &(h, s, l) in &frozen.table {
+                match merged.last_mut() {
+                    Some(last) if last.0 == h => {
+                        let end = (last.1 + last.2).max(s + l);
+                        last.1 = last.1.min(s);
+                        last.2 = end - last.1;
+                    }
+                    _ => merged.push((h, s, l)),
+                }
+            }
+            frozen.table = merged;
+        }
+        frozen.entries.shrink_to_fit();
+        frozen.table.shrink_to_fit();
+        self.frozen = Some(frozen);
     }
 
     /// All (distance, word) pairs within `max_dist` of `query`. The query's own deletes
-    /// (plus the query itself) are looked up in the delete map; each hit is verified with
-    /// true Damerau-Levenshtein distance. The exact query never self-matches (distance 0).
+    /// (plus the query itself) are looked up in the delete index; each hit is verified
+    /// with true Damerau-Levenshtein distance. The exact query never self-matches
+    /// (distance 0). An unfrozen index (test sizes) scans `pending` linearly.
     pub(super) fn lookup(&self, query: &str, max_dist: usize) -> Vec<(usize, &str)> {
         let max_dist = max_dist.min(self.max_edit);
         let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -361,14 +475,22 @@ impl SymSpell {
         let mut cands: Vec<String> = vec![query.to_string()];
         cands.extend(deletes_of(query, max_dist));
         for c in &cands {
-            if let Some(idxs) = self.deletes.get(c) {
-                for &i in idxs {
-                    if seen.insert(i) {
-                        let sugg = &self.words[i as usize];
-                        let d = damerau_levenshtein(query, sugg);
-                        if d > 0 && d <= max_dist {
-                            out.push((d, sugg.as_str()));
-                        }
+            let hash = delete_key_hash(c);
+            let hit: Vec<u32> = match &self.frozen {
+                Some(f) => f.idxs(hash).to_vec(),
+                None => self
+                    .pending
+                    .iter()
+                    .filter(|(h, _)| *h == hash)
+                    .map(|(_, i)| *i)
+                    .collect(),
+            };
+            for i in hit {
+                if seen.insert(i) {
+                    let sugg = &self.words[i as usize];
+                    let d = damerau_levenshtein(query, sugg);
+                    if d > 0 && d <= max_dist {
+                        out.push((d, sugg.as_str()));
                     }
                 }
             }
@@ -633,59 +755,41 @@ pub(super) fn maybe_correct(
     } else {
         None
     };
-    if let Some(fixed) = learned_hit {
+    // One correction pipeline: learned hit → fuzzy → capitalization, first source
+    // wins, then a single emission tail.
+    let mut correction = learned_hit.and_then(|fixed| {
         let corrected = apply_case(word, &fixed);
-        if corrected != word {
-            let prefix_owned = prefix.to_string();
-            emit_correction(
-                buffer,
-                &prefix_owned,
-                lead,
-                &original,
-                &corrected,
-                trailing,
-                inj_flag,
-                last_echo,
-                app,
-            );
-            // Full tokens (with wrappers) — the undo path's erase math needs them.
-            let orig_tok = format!("{lead}{original}{trailing}");
-            let fixed_tok = format!("{lead}{corrected}{trailing}");
-            return Some((orig_tok, fixed_tok));
-        }
-    }
+        (corrected != word).then_some(corrected)
+    });
+    // A learned hit is already persisted — skip learn-on-accept for it.
+    let from_learned = correction.is_some();
 
     // 1) Fuzzy correction (only meaningful for ≥3-char words).
-    let correction = if !ignored && word.chars().count() >= 3 {
+    if correction.is_none() && !ignored && word.chars().count() >= 3 {
         let empty = std::collections::HashSet::new();
         let mode_str = mode
             .lock()
             .ok()
             .map(|m| m.clone())
             .unwrap_or_else(|| "normal".to_string());
-        idx.lock().ok().and_then(|i| {
+        correction = idx.lock().ok().and_then(|i| {
             let ig = ignore.lock().ok();
             let ig: &std::collections::HashSet<String> = ig.as_deref().unwrap_or(&empty);
             i.correct_with_mode(word, prev_word.as_deref(), ig, &mode_str)
-        })
-    } else {
-        None
-    };
+        });
+    }
 
     // 2) Capitalization (only when the word is otherwise valid and not ignored). Undo of a
     // capitalization adds the word to the ignore list, so it won't be re-applied.
-    let correction = correction.or_else(|| {
-        if ignored {
-            return None;
-        }
+    if correction.is_none() && !ignored {
         let known = idx.lock().ok().map(|i| i.is_known(&lower)).unwrap_or(false);
-        capitalize_if_needed(word, prefix, known)
-    });
+        correction = capitalize_if_needed(word, prefix, known);
+    }
 
     if let Some(corrected) = correction {
         // Learn-on-accept: persist the typo→correction so the next occurrence is an
         // exact-map hit (no SymSpell traversal, better ranking than the general case).
-        if corrected.to_lowercase() != lower {
+        if !from_learned && corrected.to_lowercase() != lower {
             if let Ok(mut g) = learned.lock() {
                 g.insert(lower.clone(), corrected.to_lowercase());
             }

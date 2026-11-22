@@ -143,6 +143,10 @@ pub struct Db {
     /// Encryption layer (set once at desktop startup). `None` in tests / when the keychain is
     /// unavailable → all helpers above are inert and the layer behaves as plaintext.
     crypto: OnceLock<Arc<Crypto>>,
+    /// Cached settings row (None = uncached). `load_settings` decrypts the API key
+    /// through the OS keychain — a Secret Service round trip — and it was called per
+    /// AI macro per expansion. Cleared by every settings writer.
+    settings_cache: Mutex<Option<Arc<Settings>>>,
 }
 
 /// Snapshots retained per phrase (version history). Oldest pruned on every edit.
@@ -151,11 +155,19 @@ const MAX_PHRASE_VERSIONS: i64 = 50;
 impl Db {
     pub fn open(path: &str) -> DomainResult<Self> {
         let conn = Connection::open(path).map_err(db_err)?;
-        conn.execute_batch("PRAGMA foreign_keys = ON;")
-            .map_err(db_err)?;
+        // WAL + synchronous=NORMAL: writes (record_usage, version snapshots) commit with
+        // one fsync instead of a rollback journal's several, and readers stop blocking
+        // writers — this db is on the keystroke path.
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;",
+        )
+        .map_err(db_err)?;
         let db = Self {
             conn: Mutex::new(conn),
             crypto: OnceLock::new(),
+            settings_cache: Mutex::new(None),
         };
         db.run_migrations()?;
         Ok(db)
@@ -181,6 +193,7 @@ impl Db {
         let db = Self {
             conn: Mutex::new(conn),
             crypto: OnceLock::new(),
+            settings_cache: Mutex::new(None),
         };
         db.run_migrations()?;
         Ok(db)
@@ -197,10 +210,14 @@ impl Db {
             "ALTER TABLE settings ADD COLUMN ai_model TEXT NOT NULL DEFAULT 'llama-3.3-70b-versatile'",
             // Global brand-voice instructions sent as a system message with every AI call.
             "ALTER TABLE settings ADD COLUMN ai_instructions TEXT NOT NULL DEFAULT ''",
+            // Sampling temperature + optional token cap for AI calls (0 = provider default).
+            "ALTER TABLE settings ADD COLUMN ai_temperature REAL NOT NULL DEFAULT 1.0",
+            "ALTER TABLE settings ADD COLUMN ai_max_tokens INTEGER NOT NULL DEFAULT 0",
             // Hotkey for the selection-based AI flow (rewrite selection in place).
             "ALTER TABLE settings ADD COLUMN ai_selection_hotkey TEXT NOT NULL DEFAULT 'Control+Alt+A'",
             // Window-title substrings where autotext expansion is disabled entirely.
             "ALTER TABLE settings ADD COLUMN autotext_exclude_apps TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE settings ADD COLUMN sync_passphrase TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE phrases ADD COLUMN app_scope TEXT",
             "ALTER TABLE settings ADD COLUMN spellcheck_enabled INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE settings ADD COLUMN case_adapt_enabled INTEGER NOT NULL DEFAULT 1",
@@ -267,6 +284,34 @@ impl Db {
                 params![id, old_template, new_template],
             );
         }
+        // 2026-11 menu revamp: converge untouched rows onto the curated 13-tool
+        // menu — retitle, re-prompt, and re-sort (position in BUILTIN_AI_ACTIONS).
+        // Matched on template verbatim, like the passes above; a user-edited
+        // action keeps its text and its menu slot. Runs after retemplating so an
+        // old DB walks old → pre-revamp → current in one launch.
+        for (id, name, template, old_templates) in crate::domain::models::REVAMPED_AI_ACTIONS {
+            let Some(order) = crate::domain::models::BUILTIN_AI_ACTIONS
+                .iter()
+                .position(|(bid, _, _)| *bid == id)
+            else {
+                continue;
+            };
+            for old in old_templates {
+                let _ = conn.execute(
+                    "UPDATE ai_actions SET name = ?2, prompt_template = ?3, sort_order = ?4 \
+                     WHERE id = ?1 AND prompt_template = ?5",
+                    params![id, name, template, order as i64, old],
+                );
+            }
+        }
+        // Retire builtins dropped by the revamp — untouched rows only, so a
+        // user-edited action survives as a custom one.
+        for (id, name, template) in crate::domain::models::RETIRED_AI_ACTIONS {
+            let _ = conn.execute(
+                "DELETE FROM ai_actions WHERE id = ?1 AND name = ?2 AND prompt_template = ?3",
+                params![id, name, template],
+            );
+        }
         Ok(())
     }
 
@@ -289,6 +334,21 @@ impl Db {
         )
         .map_err(db_err)?;
         Ok(folder.clone())
+    }
+
+    /// True when any live phrase carries a non-empty `app_scope` — the poller's
+    /// wake condition, checked without decrypting/parsing the whole library.
+    pub fn has_scoped_phrase(&self) -> DomainResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM phrases \
+                 WHERE deleted_at IS NULL AND app_scope IS NOT NULL AND app_scope != '')",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(db_err)?;
+        Ok(exists)
     }
 
     pub fn list_folders(&self) -> DomainResult<Vec<Folder>> {
@@ -546,27 +606,25 @@ impl Db {
     ) -> DomainResult<Vec<Phrase>> {
         let crypto = self.crypto();
         let conn = self.conn.lock().unwrap();
+        // deleted_at / folder_id are plaintext columns: filter them in SQL so
+        // filtered-out rows never pay the decrypt+parse cost of body_json.
+        // prepare_cached: list runs on every library mutation ×3 (index, hotkeys,
+        // poller) — a per-call prepare recompiles the SQL each time.
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "SELECT id, folder_id, name, abbreviation, content_type, body_json, \
-                        triggers_json, sensitive, app_scope, expanded_count, last_used_at, case_mode, created_at, updated_at, deleted_at, tags FROM phrases",
+                        triggers_json, sensitive, app_scope, expanded_count, last_used_at, case_mode, created_at, updated_at, deleted_at, tags \
+                 FROM phrases \
+                 WHERE (?1 IS NULL OR folder_id = ?1) AND (?2 = 1 OR deleted_at IS NULL)",
             )
             .map_err(db_err)?;
         let rows = stmt
-            .query_map([], |r| row_to_phrase(r, crypto))
+            .query_map(params![folder_id, include_deleted], |r| row_to_phrase(r, crypto))
             .map_err(db_err)?;
         let needle = q.map(|s| s.to_lowercase());
         let mut out = Vec::new();
         for row in rows {
             let p = row.map_err(db_err)?;
-            if !include_deleted && p.deleted_at.is_some() {
-                continue;
-            }
-            if let Some(fid) = folder_id {
-                if p.folder_id != fid {
-                    continue;
-                }
-            }
             if let Some(n) = &needle {
                 let in_name = p.name.to_lowercase().contains(n);
                 let in_abbr = p
@@ -581,6 +639,34 @@ impl Db {
             out.push(p);
         }
         Ok(out)
+    }
+
+    /// Live phrases by id, in the caller's order — the popup chooser's batch fetch
+    /// (resolves 2-5 candidate ids without a whole-library decrypt pass).
+    pub fn phrases_by_ids(&self, ids: &[String]) -> DomainResult<Vec<Phrase>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let crypto = self.crypto();
+        let conn = self.conn.lock().unwrap();
+        let placeholders = ids.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT id, folder_id, name, abbreviation, content_type, body_json, \
+                    triggers_json, sensitive, app_scope, expanded_count, last_used_at, case_mode, created_at, updated_at, deleted_at, tags \
+             FROM phrases \
+             WHERE deleted_at IS NULL AND id IN ({placeholders})"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(db_err)?;
+        let list: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(list.iter()), |r| row_to_phrase(r, crypto))
+            .map_err(db_err)?;
+        let mut by_id: HashMap<String, Phrase> = HashMap::new();
+        for row in rows {
+            let p = row.map_err(db_err)?;
+            by_id.insert(p.id.clone(), p);
+        }
+        Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
     }
 
     pub fn update_phrase(&self, phrase: &Phrase) -> DomainResult<Phrase> {
@@ -681,26 +767,17 @@ impl Db {
             params![entry.id, text, entry.captured_at],
         )
         .map_err(db_err)?;
-        // Capacity-bounded — evict oldest on overflow.
+        // Capacity-bounded — evict oldest beyond the cap in one statement (no
+        // select-all + per-row delete round trip per capture).
         if capacity == 0 {
             return Ok(());
         }
-        let ids: Vec<String> = conn
-            .prepare("SELECT id FROM clipboard_entries ORDER BY captured_at DESC")
-            .map_err(db_err)?
-            .query_map([], |r| r.get::<_, String>(0))
-            .map_err(db_err)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(db_err)?;
-        if ids.len() > capacity {
-            for stale in ids.iter().skip(capacity) {
-                conn.execute(
-                    "DELETE FROM clipboard_entries WHERE id = ?1",
-                    params![stale],
-                )
-                .map_err(db_err)?;
-            }
-        }
+        conn.execute(
+            "DELETE FROM clipboard_entries WHERE id NOT IN \
+             (SELECT id FROM clipboard_entries ORDER BY captured_at DESC, rowid DESC LIMIT ?1)",
+            params![capacity],
+        )
+        .map_err(db_err)?;
         Ok(())
     }
 
@@ -1101,6 +1178,28 @@ impl Db {
         Ok(())
     }
 
+    /// Decode a version row's encrypted body + triggers into domain types. `strict`
+    /// propagates body parse errors (restore must not silently wipe a phrase);
+    /// lenient mode (history list) degrades a corrupt row to empty segments so one
+    /// bad row can't blank the list.
+    fn decode_version_row(
+        &self,
+        body_json: &str,
+        triggers_json: &str,
+        strict: bool,
+    ) -> DomainResult<(Vec<Segment>, Vec<TriggerBinding>)> {
+        let body_json = decode_body_json(body_json, self.crypto());
+        let body: Vec<Segment> = if strict {
+            serde_json::from_str(&body_json)
+                .map_err(|e| DomainError::Validation(format!("version body: {e}")))?
+        } else {
+            serde_json::from_str(&body_json).unwrap_or_default()
+        };
+        let triggers: Vec<TriggerBinding> =
+            serde_json::from_str(triggers_json).unwrap_or_default();
+        Ok((body, triggers))
+    }
+
     pub fn list_versions(&self, phrase_id: &str) -> DomainResult<Vec<PhraseVersion>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
@@ -1123,10 +1222,7 @@ impl Db {
         let mut out = Vec::new();
         for row in rows {
             let (id, pid, body_json, triggers_json, saved_at) = row.map_err(db_err)?;
-            let body_json = decode_body_json(&body_json, self.crypto());
-            let body: Vec<Segment> = serde_json::from_str(&body_json).unwrap_or_default();
-            let triggers: Vec<TriggerBinding> =
-                serde_json::from_str(&triggers_json).unwrap_or_default();
+            let (body, triggers) = self.decode_version_row(&body_json, &triggers_json, false)?;
             out.push(PhraseVersion {
                 id,
                 phrase_id: pid,
@@ -1155,11 +1251,7 @@ impl Db {
                 .optional()
                 .map_err(db_err)?;
             let (bj, tj) = row.ok_or_else(|| DomainError::NotFound("version not found".into()))?;
-            let bj = decode_body_json(&bj, self.crypto());
-            let body: Vec<Segment> = serde_json::from_str(&bj)
-                .map_err(|e| DomainError::Validation(format!("version body: {e}")))?;
-            let triggers: Vec<TriggerBinding> = serde_json::from_str(&tj).unwrap_or_default();
-            (body, triggers)
+            self.decode_version_row(&bj, &tj, true)?
         };
         phrase.body = body;
         phrase.triggers = triggers;
@@ -1170,18 +1262,46 @@ impl Db {
     // Settings
     // ----------------------------------------------------------------------- //
     pub fn load_settings(&self) -> DomainResult<Settings> {
+        // Cache-first: the cached copy skips a 26-column SELECT + a keychain
+        // decrypt of the API key on every AI macro / AI action / hotkey reload.
+        // Writers (`save_settings`, sync's settings merge) clear it.
+        if let Ok(g) = self.settings_cache.lock() {
+            if let Some(cached) = g.as_ref() {
+                return Ok((**cached).clone());
+            }
+        }
+        let fresh = self.load_settings_uncached()?;
+        if let Ok(mut g) = self.settings_cache.lock() {
+            *g = Some(Arc::new(fresh.clone()));
+        }
+        Ok(fresh)
+    }
+
+    /// Invalidate the settings cache — call after any direct settings-row write.
+    pub fn invalidate_settings_cache(&self) {
+        if let Ok(mut g) = self.settings_cache.lock() {
+            *g = None;
+        }
+    }
+
+    fn load_settings_uncached(&self) -> DomainResult<Settings> {
         let crypto = self.crypto();
         let conn = self.conn.lock().unwrap();
-        let row = conn
-            .query_row(
+        let mut stmt = conn
+            .prepare_cached(
                 "SELECT popup_hotkey, autotext_enabled, clipboard_enabled, autostart, \
                         ai_enabled, ai_base_url, ai_api_key, ai_model, \
                         spellcheck_enabled, case_adapt_enabled, spellcheck_ignore, spellcheck_mode, \
                         spellcheck_hotkey, clipboard_max_length, clipboard_max_entries, \
                         spellcheck_exclude_apps, spellcheck_delivery, start_minimized, \
                         encrypt_at_rest, ai_instructions, ai_selection_hotkey, \
-                        autotext_exclude_apps, sync_dir, review_sentence \
+                        ai_temperature, ai_max_tokens, \
+                        autotext_exclude_apps, sync_dir, review_sentence, sync_passphrase \
                  FROM settings WHERE id = 1",
+            )
+            .map_err(db_err)?;
+        let row = stmt
+            .query_row(
                 [],
                 |r| {
                     let ai_api_key_raw: String = r.get(6)?;
@@ -1207,9 +1327,13 @@ impl Db {
                         encrypt_at_rest: r.get::<_, i64>(18)? != 0,
                         ai_instructions: r.get(19)?,
                         ai_selection_hotkey: r.get(20)?,
-                        autotext_exclude_apps: r.get(21)?,
-                        sync_dir: r.get(22)?,
-                        review_sentence: r.get::<_, i64>(23)? != 0,
+                        ai_temperature: r.get(21)?,
+                        ai_max_tokens: r.get(22)?,
+                        autotext_exclude_apps: r.get(23)?,
+                        sync_dir: r.get(24)?,
+                        review_sentence: r.get::<_, i64>(25)? != 0,
+                        sync_passphrase: maybe_decrypt(crypto, &r.get::<_, String>(26)?)
+                            .unwrap_or_default(),
                     })
                 },
             )
@@ -1264,12 +1388,12 @@ impl Db {
         conn.execute(
             "INSERT INTO settings (id, popup_hotkey, autotext_enabled, clipboard_enabled, \
              autostart, ai_enabled, ai_base_url, ai_api_key, ai_model, ai_instructions, \
-             ai_selection_hotkey, \
+             ai_selection_hotkey, ai_temperature, ai_max_tokens, \
              spellcheck_enabled, case_adapt_enabled, spellcheck_ignore, spellcheck_mode, \
              spellcheck_hotkey, clipboard_max_length, clipboard_max_entries, \
              spellcheck_exclude_apps, spellcheck_delivery, start_minimized, encrypt_at_rest, \
-             autotext_exclude_apps, sync_dir, review_sentence) \
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24) \
+             autotext_exclude_apps, sync_dir, review_sentence, sync_passphrase) \
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27) \
              ON CONFLICT(id) DO UPDATE SET \
                 popup_hotkey=excluded.popup_hotkey, \
                 autotext_enabled=excluded.autotext_enabled, \
@@ -1281,6 +1405,8 @@ impl Db {
                 ai_model=excluded.ai_model, \
                 ai_instructions=excluded.ai_instructions, \
                 ai_selection_hotkey=excluded.ai_selection_hotkey, \
+                ai_temperature=excluded.ai_temperature, \
+                ai_max_tokens=excluded.ai_max_tokens, \
                 autotext_exclude_apps=excluded.autotext_exclude_apps, \
                 spellcheck_enabled=excluded.spellcheck_enabled, \
                 case_adapt_enabled=excluded.case_adapt_enabled, \
@@ -1294,7 +1420,7 @@ impl Db {
                 start_minimized=excluded.start_minimized, \
                 encrypt_at_rest=excluded.encrypt_at_rest, \
                 sync_dir=excluded.sync_dir, \
-                review_sentence=excluded.review_sentence",
+                review_sentence=excluded.review_sentence,                 sync_passphrase=excluded.sync_passphrase",
             params![
                 s.popup_hotkey,
                 s.autotext_enabled as i64,
@@ -1306,6 +1432,8 @@ impl Db {
                 s.ai_model,
                 s.ai_instructions,
                 s.ai_selection_hotkey,
+                s.ai_temperature,
+                s.ai_max_tokens,
                 s.spellcheck_enabled as i64,
                 s.case_adapt_enabled as i64,
                 s.spellcheck_ignore,
@@ -1319,10 +1447,12 @@ impl Db {
                 s.encrypt_at_rest as i64,
                 s.autotext_exclude_apps,
                 s.sync_dir,
-                s.review_sentence as i64
+                s.review_sentence as i64,
+                maybe_encrypt(self.crypto(), &s.sync_passphrase)
             ],
         )
         .map_err(db_err)?;
+        self.invalidate_settings_cache();
         Ok(s.clone())
     }
 
@@ -1455,6 +1585,7 @@ impl Db {
             params![joined],
         )
         .map_err(db_err)?;
+        self.invalidate_settings_cache();
         Ok(())
     }
 
@@ -2203,6 +2334,25 @@ mod tests {
     }
 
     #[test]
+    fn ai_generation_settings_roundtrip() {
+        let db = db();
+        let mut s = db.load_settings().unwrap();
+        s.ai_temperature = 0.4;
+        s.ai_max_tokens = 1024;
+        db.save_settings(&s).unwrap();
+        let loaded = db.load_settings().unwrap();
+        assert!((loaded.ai_temperature - 0.4).abs() < 1e-9);
+        assert_eq!(loaded.ai_max_tokens, 1024);
+        // Back to the defaults (1.0 / unset) persists too.
+        s.ai_temperature = 1.0;
+        s.ai_max_tokens = 0;
+        db.save_settings(&s).unwrap();
+        let loaded = db.load_settings().unwrap();
+        assert!((loaded.ai_temperature - 1.0).abs() < 1e-9);
+        assert_eq!(loaded.ai_max_tokens, 0);
+    }
+
+    #[test]
     fn ai_api_key_encrypted_when_nonempty() {
         let db = db_with_crypto();
         let mut s = db.load_settings().unwrap();
@@ -2402,12 +2552,15 @@ mod tests {
             .unwrap();
         }
         db.run_migrations().unwrap();
-        // Untouched template → upgraded to the {language} prompt.
+        // Untouched template → upgraded through the whole chain to the CURRENT
+        // builtin text ({language} prompt, v2 wording).
         let upgraded = db.get_ai_action("ai-translate").unwrap().unwrap();
-        assert_eq!(
-            upgraded.prompt_template,
-            "Translate to {language}:\n{clipboard}"
-        );
+        let builtin_v2 = crate::domain::models::BUILTIN_AI_ACTIONS
+            .iter()
+            .find(|(id, _, _)| *id == "ai-translate")
+            .map(|(_, _, t)| *t)
+            .unwrap();
+        assert_eq!(upgraded.prompt_template, builtin_v2);
 
         // A user-edited template is left exactly as-is.
         db.save_ai_action(&AiAction {
@@ -2423,6 +2576,67 @@ mod tests {
                 .prompt_template,
             "Translate to German:\n{clipboard}"
         );
+    }
+
+    #[test]
+    fn revamp_converges_untouched_builtins_and_retires_dropped_ones() {
+        let db = db();
+        // Simulate a pre-revamp database: stock rows (old text), a user-edited
+        // row, and a builtin the revamp retires.
+        {
+            let conn = db.conn.lock().unwrap();
+            for (id, name, template, order) in [
+                (
+                    "ai-formal",
+                    "Make formal",
+                    "Rewrite in a formal, professional tone. Keep the meaning and roughly the same length:\n{clipboard}",
+                    1,
+                ),
+                (
+                    "ai-translate",
+                    "My translator",
+                    "Translate to German:\n{clipboard}",
+                    0,
+                ),
+                (
+                    "ai-paraphrase",
+                    "Paraphrase",
+                    "Paraphrase this text in a {mode} style — same meaning, fresh wording, similar length:\n{clipboard}",
+                    19,
+                ),
+            ] {
+                conn.execute(
+                    "INSERT OR REPLACE INTO ai_actions (id, name, prompt_template, sort_order, builtin) \
+                     VALUES (?1, ?2, ?3, ?4, 1)",
+                    params![id, name, template, order],
+                )
+                .unwrap();
+            }
+        }
+        db.run_migrations().unwrap();
+
+        // Untouched stock row → retitled, re-prompted, re-sorted onto the menu.
+        let formal = db.get_ai_action("ai-formal").unwrap().unwrap();
+        let builtin = crate::domain::models::BUILTIN_AI_ACTIONS
+            .iter()
+            .find(|(id, _, _)| *id == "ai-formal")
+            .unwrap();
+        assert_eq!(formal.name, builtin.1);
+        assert_eq!(formal.prompt_template, builtin.2);
+        assert_eq!(formal.sort_order, 2); // Grammar check, Rewrite for clarity, then this.
+
+        // User-edited template keeps its text (name too) and its slot.
+        let mine = db.get_ai_action("ai-translate").unwrap().unwrap();
+        assert_eq!(mine.name, "My translator");
+        assert_eq!(mine.prompt_template, "Translate to German:\n{clipboard}");
+        assert_eq!(mine.sort_order, 0);
+
+        // Retired builtin, untouched → deleted by the revamp.
+        assert!(db.get_ai_action("ai-paraphrase").unwrap().is_none());
+
+        // New revamp builtins (no pre-revamp row) are seeded in menu order.
+        let humanize = db.get_ai_action("ai-humanize").unwrap().unwrap();
+        assert_eq!(humanize.sort_order, 4);
     }
 
     #[test]

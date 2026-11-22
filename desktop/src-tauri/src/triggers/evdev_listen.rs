@@ -100,6 +100,9 @@ fn spawn_reader(
     // debug log as the same key arriving from two different devices.
     let tag: std::sync::Arc<str> = node.into();
     std::thread::spawn(move || {
+        // Event names exist only for the debug log (listen.rs); skip the per-event
+        // allocation entirely when debugging is off.
+        let debug = crate::debug_enabled();
         let mut buf = [0u8; RECORD_SIZE * 16];
         loop {
             match file.read(&mut buf) {
@@ -116,10 +119,12 @@ fn spawn_reader(
                         let mut cb = callback.lock().unwrap_or_else(|e| e.into_inner());
                         cb(Event {
                             time: SystemTime::now(),
-                            name: Some(if val == 2 {
-                                format!("{tag}*")
-                            } else {
-                                tag.to_string()
+                            name: debug.then(|| {
+                                if val == 2 {
+                                    format!("{tag}*")
+                                } else {
+                                    tag.to_string()
+                                }
                             }),
                             event_type,
                         });

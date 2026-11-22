@@ -13,12 +13,7 @@
     try {
       const data = await api.exportLibrary();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "phrasexp-library.json";
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, "phrasexp-library.json");
       const nSensitive = data.sensitive_count ?? 0;
       if (nSensitive > 0) {
         toast(
@@ -28,6 +23,44 @@
       } else {
         toast("Library exported", "ok");
       }
+    } catch (e) {
+      toast(errMsg(e), "err");
+    }
+  }
+
+  function downloadBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  /** Format exporters: Rust formats the text-only snippets; macros, images, and
+   *  regex triggers can't transfer, so the toast reports what was skipped. */
+  async function exportFormat(
+    kind: "espanso" | "textexpander" | "csv",
+  ) {
+    try {
+      const r =
+        kind === "espanso"
+          ? await api.exportEspanso()
+          : kind === "textexpander"
+            ? await api.exportTextexpanderCsv()
+            : await api.exportCsv();
+      const file = {
+        espanso: { blob: new Blob([r.text], { type: "text/yaml" }), name: "espanso-matches.yaml" },
+        textexpander: { blob: new Blob([r.text], { type: "text/csv" }), name: "textexpander-snippets.csv" },
+        csv: { blob: new Blob([r.text], { type: "text/csv" }), name: "phrasexp-snippets.csv" },
+      }[kind];
+      downloadBlob(file.blob, file.name);
+      toast(
+        `Exported ${r.exported} snippet${r.exported === 1 ? "" : "s"}${
+          r.skipped > 0 ? ` — ${r.skipped} skipped (macros/images/regex don't transfer)` : ""
+        }`,
+        "ok",
+      );
     } catch (e) {
       toast(errMsg(e), "err");
     }
@@ -52,6 +85,27 @@
     }
   }
 
+  // Usage stats (3.2): never-expanded phrases — cleanup candidates. Loaded on
+  // demand ("Review unused") so the panel stays cheap.
+  let unusedCount = $state<number | null>(null);
+  async function loadUnusedCount() {
+    try {
+      const all = await api.listPhrases(undefined, undefined, false, "name");
+      unusedCount = all.filter((p) => (p.expanded_count ?? 0) === 0).length;
+    } catch {
+      // stats are decorative — ignore load failures
+    }
+  }
+  async function reviewUnused() {
+    try {
+      const all = await api.listPhrases(undefined, undefined, false, "name");
+      app.unusedPhrases = all.filter((p) => (p.expanded_count ?? 0) === 0);
+      app.modal = "unused";
+    } catch (e) {
+      toast(errMsg(e), "err");
+    }
+  }
+
   // Usage stats (1.4): top phrases by expansion count, loaded on mount.
   let topPhrases = $state<PhraseSummary[]>([]);
   // File-based sync state: the configured folder, the snapshot header, and busy
@@ -63,6 +117,7 @@
     try {
       const all = await api.listPhrases(undefined, undefined, false, "most_used");
       topPhrases = all.filter((p) => (p.expanded_count ?? 0) > 0).slice(0, 5);
+      unusedCount = all.filter((p) => (p.expanded_count ?? 0) === 0).length;
     } catch {
       // stats are decorative — ignore load failures
     }
@@ -84,6 +139,23 @@
         ? { device: null, exported_at: null, phrases: null }
         : null;
       toast(syncDir.trim() ? "Sync folder saved" : "Sync disabled", "ok");
+    } catch (e) {
+      toast(errMsg(e), "err");
+    }
+  }
+
+  // Snapshot passphrase (3.1): seals library.json with AES-256-GCM under a
+  // PBKDF2 key. Same passphrase required on every device sharing the folder.
+  let syncPassphrase = $state("");
+  async function saveSyncPassphrase() {
+    try {
+      await api.syncSetPassphrase(syncPassphrase);
+      toast(
+        syncPassphrase
+          ? "Snapshot encryption enabled — use the SAME passphrase on every device"
+          : "Snapshot encryption off — the next sync writes plaintext",
+        syncPassphrase ? "ok" : "warn",
+      );
     } catch (e) {
       toast(errMsg(e), "err");
     }
@@ -115,6 +187,12 @@
     <div class="card-h">Backup</div>
     <p class="faint">Export your full library (folders, phrases, macros) to a JSON file you can re-import anywhere.</p>
     <button onclick={exportLib}>⭳ Export library as JSON</button>
+    <p class="faint">Migrating to another tool? Text-only snippets export to Espanso or TextExpander (macros, images, and regex triggers don't transfer).</p>
+    <div class="export-row">
+      <button onclick={() => exportFormat("espanso")}>Espanso YAML</button>
+      <button onclick={() => exportFormat("textexpander")}>TextExpander CSV</button>
+      <button onclick={() => exportFormat("csv")}>Plain CSV</button>
+    </div>
   </section>
 
   <section class="card">
@@ -149,7 +227,21 @@
         </span>
       {/if}
     </div>
-    <p class="faint warn-line">The snapshot file is plaintext — sensitive phrases are included unencrypted.</p>
+    <div class="sync-row">
+      <input
+        class="sync-dir"
+        type="password"
+        bind:value={syncPassphrase}
+        placeholder="Passphrase — empty = plaintext snapshot"
+        aria-label="Sync snapshot passphrase"
+      />
+      <button onclick={saveSyncPassphrase}>Seal</button>
+    </div>
+    <p class="faint">
+      With a passphrase, the snapshot is encrypted (AES-256-GCM) — use the SAME
+      passphrase on every device sharing the folder.
+    </p>
+    <p class="faint warn-line">Without one, the snapshot file is plaintext — sensitive phrases are included unencrypted.</p>
   </section>
 
   <section class="card">
@@ -159,7 +251,7 @@
   </section>
 
   <section class="card">
-    <div class="card-h">Top phrases</div>
+    <div class="card-h">Usage stats</div>
     {#if topPhrases.length === 0}
       <p class="faint">No expansions counted yet — usage builds up as you type abbreviations.</p>
     {:else}
@@ -172,6 +264,11 @@
           </div>
         {/each}
       </div>
+    {/if}
+    {#if unusedCount !== null && unusedCount > 0}
+      <button onclick={reviewUnused}>Review {unusedCount} never-used phrase{unusedCount === 1 ? "" : "s"}</button>
+    {:else if unusedCount === 0}
+      <p class="faint">Every phrase has been used at least once.</p>
     {/if}
   </section>
 
@@ -212,6 +309,11 @@
   .card.danger {
     border-color: var(--danger);
     background: var(--danger-soft);
+  }
+  .export-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
   }
   .top-row {
     display: flex;

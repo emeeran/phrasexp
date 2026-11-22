@@ -54,7 +54,10 @@ pub fn delete_folder(folder_id: String, state: State<'_, AppState>) -> Result<()
 fn after_library_change(state: &State<'_, AppState>, app: Option<&tauri::AppHandle>, sync: bool) {
     let _ = crate::triggers::rebuild_index(&state.db, &state.abbrev_index);
     state.refresh_app_poll_needed();
+    // Tell every webview (popup included) the library mutated, so cached lists can
+    // refresh on event instead of re-fetching on every focus gain.
     if let Some(app) = app {
+        let _ = app.emit("library-changed", ());
         crate::reregister_hotkeys(app);
     }
     if sync {
@@ -128,6 +131,17 @@ pub fn list_phrases(
 #[tauri::command]
 pub fn get_phrase(phrase_id: String, state: State<'_, AppState>) -> Result<Phrase, ApiError> {
     Ok(state.db.get_active_phrase(&phrase_id)?)
+}
+
+/// Batch fetch by id — the popup chooser resolves its 2-5 candidates without the
+/// whole-library read of `list_phrases`. Preserves the caller's id order.
+#[tauri::command]
+pub fn get_phrases(
+    ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<PhraseSummary>, ApiError> {
+    let phrases = state.db.phrases_by_ids(&ids)?;
+    Ok(phrases.iter().map(|p| state.db.summary(p)).collect())
 }
 
 #[tauri::command]
@@ -457,6 +471,12 @@ pub async fn run_ai_action(
     state
         .ai_cancel
         .store(false, std::sync::atomic::Ordering::Relaxed);
+    // Both failure paths restore the selection copy + prior clipboard; success keeps
+    // them (old_clipboard rides into AiPending so ai_decide can restore it later).
+    let restore_on_failure = || {
+        restore_clipboard(Some(ctx.selection.clone()));
+        restore_clipboard(ctx.old_clipboard.clone());
+    };
     match stream_ai_action(&app, &state, &action_id, &ctx.selection, params.clone()).await {
         Ok(result) => {
             if let Ok(mut g) = state.ai_result.lock() {
@@ -481,8 +501,7 @@ pub async fn run_ai_action(
             // User cancelled mid-stream: same cleanup as a discard — the user's
             // text is untouched, their prior clipboard comes back, the popup
             // stands down (no result view to show).
-            restore_clipboard(Some(ctx.selection));
-            restore_clipboard(ctx.old_clipboard);
+            restore_on_failure();
             let _ = app.emit("ai-cancelled", ());
             Ok(String::new())
         }
@@ -491,8 +510,7 @@ pub async fn run_ai_action(
             // text is still reachable, then restore their original clipboard. Show
             // the popup — it's the surface the user is looking at (the main window
             // is usually hidden to tray, so phrase-error toasts are never seen).
-            restore_clipboard(Some(ctx.selection));
-            restore_clipboard(ctx.old_clipboard);
+            restore_on_failure();
             crate::show_popup(&app);
             let _ = app.emit("ai-result-error", e.to_string());
             Err(ApiError::from(e))
@@ -509,6 +527,9 @@ pub async fn run_ai_action(
 ///   is deliberately NOT restored, since the rewrite is meant to be taken from there.
 /// - `retry` — run the same action again on the same selection; the pending result
 ///   stays until the new one replaces it, so a failed retry keeps the old output.
+/// - `rerun` — like retry, but through a DIFFERENT builtin (the result view's
+///   quick chips): `text` carries the target action id, and the pending slot's
+///   action + params adopt it so a later retry re-runs the chip action.
 /// - `discard` — nothing was pasted; just restore the user's prior clipboard.
 /// `text` optionally overrides what replace/insert/copy act on — the webview sends
 /// it when the user picked one option out of a multi-option response.
@@ -528,7 +549,7 @@ pub async fn ai_decide(
         .ok_or_else(|| ApiError::from(DomainError::Validation("No pending AI result".into())))?;
     // An override narrower than the pending result must still carry content.
     let chosen = match text {
-        Some(t) if !t.trim().is_empty() => t,
+        Some(ref t) if !t.trim().is_empty() => t.clone(),
         _ => pending.result.clone(),
     };
     match decision.as_str() {
@@ -543,9 +564,7 @@ pub async fn ai_decide(
         }
         "copy" => {
             let _ = state.ai_result.lock().map(|mut g| *g = None);
-            arboard::Clipboard::new()
-                .and_then(|mut c| c.set_text(chosen.clone()))
-                .map_err(|e| ApiError::from(DomainError::Validation(format!("clipboard: {e}"))))?;
+            copy_to_clipboard(&chosen)?;
             Ok(chosen)
         }
         "retry" => {
@@ -574,6 +593,39 @@ pub async fn ai_decide(
                     let _ = app.emit("ai-cancelled", ());
                     Ok(String::new())
                 }
+                Err(e) => Err(ApiError::from(e)),
+            }
+        }
+        "rerun" => {
+            let Some(action_id) = text.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+                return Err(ApiError::from(DomainError::Validation(
+                    "rerun needs an action id".into(),
+                )));
+            };
+            state
+                .ai_cancel
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            match stream_ai_action(&app, &state, action_id, &pending.selection, None).await {
+                Ok(fresh) => {
+                    if let Ok(mut g) = state.ai_result.lock() {
+                        *g = Some(crate::AiPending {
+                            action_id: action_id.to_string(),
+                            // Chip builtins carry no interactive tokens; drop the
+                            // origin action's params so they can't leak across.
+                            params: None,
+                            result: fresh.clone(),
+                            ..pending
+                        });
+                    }
+                    Ok(fresh)
+                }
+                Err(e) if e.to_string().contains(crate::triggers::ai::CANCELLED_MSG) => {
+                    // Same stand-down as a cancelled retry.
+                    let _ = app.emit("ai-cancelled", ());
+                    Ok(String::new())
+                }
+                // Peek-not-take (shared pending above): a failed rerun keeps the
+                // previous result decidable, same as a failed retry.
                 Err(e) => Err(ApiError::from(e)),
             }
         }
@@ -612,9 +664,9 @@ async fn stream_ai_action(
     let mut acc = String::new();
     let result = crate::triggers::ai::complete_stream(&settings, &prompt, &cancel, |delta| {
         acc.push_str(delta);
-        // Accumulated text keeps event ordering self-evident — the popup just
-        // assigns the payload; no client-side stitching or de-dup needed.
-        let _ = emitter.emit("ai-delta", acc.clone());
+        // The webview APPENDS each delta to its own accumulator — re-emitting the
+        // whole accumulated string per token was O(n²) IPC churn on long answers.
+        let _ = emitter.emit("ai-delta", delta);
     })
     .await?;
     Ok(result)
@@ -766,6 +818,17 @@ pub fn sync_set_dir(state: State<'_, AppState>, dir: String) -> Result<(), ApiEr
     Ok(())
 }
 
+/// Set the sync snapshot passphrase (empty = plaintext snapshot). Every device
+/// sharing the sync folder must use the SAME passphrase — a mismatch is a named
+/// decryption error at merge time, never a silent library overwrite.
+#[tauri::command]
+pub fn sync_set_passphrase(state: State<'_, AppState>, passphrase: String) -> Result<(), ApiError> {
+    let mut s = state.db.load_settings()?;
+    s.sync_passphrase = passphrase;
+    state.db.save_settings(&s)?;
+    Ok(())
+}
+
 /// Current sync configuration + snapshot header (None fields when no snapshot
 /// exists yet — sync is configured but hasn't run).
 #[tauri::command]
@@ -774,15 +837,10 @@ pub fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus, ApiError> {
     let dir = settings.sync_dir;
     let (mut device, mut exported_at, mut phrases) = (None, None, None);
     if !dir.trim().is_empty() {
-        if let Ok(s) =
-            std::fs::read_to_string(std::path::Path::new(&dir).join(crate::sync::SYNC_FILE))
-        {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
-                device = v["device"].as_str().map(String::from);
-                exported_at = v["exported_at"].as_str().map(String::from);
-                phrases = v["phrases"].as_array().map(|a| a.len());
-            }
-        }
+        let h = crate::sync::read_snapshot_header(std::path::Path::new(&dir));
+        device = h.device;
+        exported_at = h.exported_at;
+        phrases = h.phrase_count;
     }
     Ok(SyncStatus {
         dir,
@@ -792,14 +850,38 @@ pub fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus, ApiError> {
     })
 }
 
+/// Auto-sync coalescing: a burst of library mutations (import, rapid saves)
+/// collapses into ONE sync ~2 s after the last request, instead of a whole-library
+/// snapshot rewrite per edit. Manual "Sync now" bypasses this and runs immediately.
+static SYNC_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SYNC_WORKER_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Best-effort sync after a library mutation: never blocks the command, never
 /// surfaces errors (a failed auto-sync just means the file is one beat behind;
 /// Settings → Data → "Sync now" forces it).
 fn spawn_sync(db: std::sync::Arc<crate::db::Db>) {
-    std::thread::spawn(move || {
-        if let Err(e) = crate::sync::sync_now(&db) {
-            crate::debug_log(&format!("auto sync: {e}"));
+    use std::sync::atomic::Ordering;
+    SYNC_REQUESTED.store(true, Ordering::Relaxed);
+    // One worker at a time; it keeps looping while requests keep arriving and
+    // exits after a quiet window. The double-check on exit closes the race where
+    // a request lands between the last swap and the running-flag clear.
+    if SYNC_WORKER_RUNNING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if SYNC_REQUESTED.swap(false, Ordering::Relaxed) {
+            if let Err(e) = crate::sync::sync_now(&db) {
+                crate::debug_log(&format!("auto sync: {e}"));
+            }
+            continue;
         }
+        SYNC_WORKER_RUNNING.store(false, Ordering::Relaxed);
+        if SYNC_REQUESTED.swap(false, Ordering::Relaxed) {
+            SYNC_WORKER_RUNNING.store(true, Ordering::Relaxed);
+            continue;
+        }
+        break;
     });
 }
 
@@ -853,6 +935,132 @@ pub fn export_library(state: State<'_, AppState>) -> Result<serde_json::Value, A
         "phrases": phrases,
         "sensitive_count": sensitive_count,
     }))
+}
+
+// -- Format exporters (3.3): Espanso YAML / TextExpander CSV / plain CSV ------- //
+// Foreign formats carry TEXT-ONLY snippets: macros, images, and AI bodies have no
+// honest representation there, so phrases containing them are SKIPPED and the
+// count is reported. Regex triggers and app scoping likewise don't transfer.
+
+/// One exportable row: trigger/abbreviation, replacement text, label.
+pub(crate) struct ExportRow {
+    trigger: String,
+    label: String,
+    text: String,
+}
+
+/// Distill phrases into export rows; returns (rows, skipped_count). Phrases
+/// without an abbreviation, with regex triggers, with macro/image/AI bodies, or
+/// with empty text are skipped. Pure — unit-tested.
+pub(crate) fn export_rows(phrases: &[Phrase]) -> (Vec<ExportRow>, usize) {
+    let mut rows = Vec::new();
+    let mut skipped = 0usize;
+    for p in phrases {
+        let Some(abbr) = p.abbreviation.as_deref().filter(|a| !a.is_empty()) else {
+            skipped += 1;
+            continue;
+        };
+        let is_regex = p
+            .triggers
+            .iter()
+            .any(|t| t.kind == crate::domain::models::TriggerType::Autotext && t.regex);
+        if is_regex {
+            skipped += 1;
+            continue;
+        }
+        // Only plain-text bodies transfer; anything else (macro/image segment) can't.
+        let mut text = String::new();
+        let mut exportable = true;
+        for seg in &p.body {
+            match seg {
+                crate::domain::models::Segment::Text { text: t } => text.push_str(t),
+                _ => {
+                    exportable = false;
+                    break;
+                }
+            }
+        }
+        if !exportable || text.trim().is_empty() {
+            skipped += 1;
+            continue;
+        }
+        rows.push(ExportRow {
+            trigger: abbr.to_string(),
+            label: p.name.clone(),
+            text,
+        });
+    }
+    (rows, skipped)
+}
+
+fn export_payload(text: String, exported: usize, skipped: usize) -> serde_json::Value {
+    serde_json::json!({ "text": text, "exported": exported, "skipped": skipped })
+}
+
+/// Espanso `matches` YAML — re-importable by Espanso directly (`espanso match`).
+#[tauri::command]
+pub fn export_espanso(state: State<'_, AppState>) -> Result<serde_json::Value, ApiError> {
+    let phrases = state.db.list_phrases(None, None, false)?;
+    let (rows, skipped) = export_rows(&phrases);
+    let text = espanso_yaml(&rows);
+    Ok(export_payload(text, rows.len(), skipped))
+}
+
+/// TextExpander CSV (official columns: abbreviation, snippet, label) — round-trips
+/// through the existing `import_textexpander`.
+#[tauri::command]
+pub fn export_textexpander_csv(state: State<'_, AppState>) -> Result<serde_json::Value, ApiError> {
+    let phrases = state.db.list_phrases(None, None, false)?;
+    let (rows, skipped) = export_rows(&phrases);
+    Ok(export_payload(textexpander_csv(&rows), rows.len(), skipped))
+}
+
+/// Plain CSV (`abbreviation,text` per line) — round-trips through `import_csv`.
+#[tauri::command]
+pub fn export_csv(state: State<'_, AppState>) -> Result<serde_json::Value, ApiError> {
+    let phrases = state.db.list_phrases(None, None, false)?;
+    let (rows, skipped) = export_rows(&phrases);
+    Ok(export_payload(plain_csv(&rows), rows.len(), skipped))
+}
+
+fn textexpander_csv(rows: &[ExportRow]) -> String {
+    let mut w = csv::WriterBuilder::new().from_writer(Vec::new());
+    let _ = w.write_record(["abbreviation", "snippet", "label"]);
+    for r in rows {
+        let _ = w.write_record([&r.trigger, &r.text, &r.label]);
+    }
+    String::from_utf8_lossy(&w.into_inner().unwrap_or_default()).into_owned()
+}
+
+/// Espanso `matches` YAML (pure helper — the command wraps it with counts).
+/// serde_yaml emits literal block scalars for multiline `replace` values, so
+/// multi-line snippets round-trip without hand-rolled quoting.
+fn espanso_yaml(rows: &[ExportRow]) -> String {
+    let matches: Vec<serde_yaml::Value> = rows
+        .iter()
+        .map(|r| {
+            serde_yaml::to_value(serde_json::json!({
+                "trigger": r.trigger,
+                "replace": r.text,
+                "label": r.label,
+            }))
+            .unwrap_or(serde_yaml::Value::Null)
+        })
+        .collect();
+    let mut root = serde_yaml::Mapping::new();
+    root.insert(
+        serde_yaml::Value::from("matches"),
+        serde_yaml::to_value(&matches).unwrap_or(serde_yaml::Value::Null),
+    );
+    serde_yaml::to_string(&serde_yaml::Value::Mapping(root)).unwrap_or_default()
+}
+
+fn plain_csv(rows: &[ExportRow]) -> String {
+    let mut w = csv::WriterBuilder::new().from_writer(Vec::new());
+    for r in rows {
+        let _ = w.write_record([&r.trigger, &r.text]);
+    }
+    String::from_utf8_lossy(&w.into_inner().unwrap_or_default()).into_owned()
 }
 
 /// Import phrases from CSV: one per line, `abbreviation,text` (text may contain commas).
@@ -963,6 +1171,30 @@ fn parse_espanso_yaml(yaml: &str) -> Vec<ImportRow> {
         }
     }
 
+    /// Store one `trigger:`/`replace:` key line (with or without the `- ` list
+    /// prefix already stripped). Other keys (form/vars/extensions) are ignored;
+    /// a match without a literal `replace` is skipped at flush — imported
+    /// snippets are inert text only.
+    fn store_match_key(
+        body: &str,
+        indent: usize,
+        trigger: &mut Option<String>,
+        replace: &mut Option<String>,
+        block_key_indent: &mut Option<usize>,
+    ) {
+        if let Some(v) = body.strip_prefix("trigger:") {
+            *trigger = Some(unquote(v));
+        } else if let Some(v) = body.strip_prefix("replace:") {
+            let v = v.trim();
+            if matches!(v, "|" | "|-" | "|+" | ">" | ">-") {
+                *block_key_indent = Some(indent);
+                *replace = Some(String::new());
+            } else if !v.is_empty() {
+                *replace = Some(unquote(v));
+            }
+        }
+    }
+
     for raw in yaml.lines() {
         // Inside a block scalar: blank lines and anything deeper-indented than the
         // `replace:` key are content. Collected as literal lines (the folded `>`
@@ -1005,39 +1237,25 @@ fn parse_espanso_yaml(yaml: &str) -> Vec<ImportRow> {
             continue;
         }
         // A new list item ends the previous match entry.
-        if let Some(body) = trimmed.strip_prefix("- ") {
+        if let Some(rest) = trimmed.strip_prefix("- ") {
             flush(&mut rows, &mut trigger, &mut replace);
-            let body = body.trim();
-            if let Some(v) = body.strip_prefix("trigger:") {
-                trigger = Some(unquote(v));
-                continue;
-            }
-            if let Some(v) = body.strip_prefix("replace:") {
-                let v = v.trim();
-                if matches!(v, "|" | "|-" | "|+" | ">" | ">-") {
-                    block_key_indent = Some(indent);
-                    replace = Some(String::new());
-                } else if !v.is_empty() {
-                    replace = Some(unquote(v));
-                }
-                continue;
-            }
+            store_match_key(
+                rest.trim(),
+                indent,
+                &mut trigger,
+                &mut replace,
+                &mut block_key_indent,
+            );
             // Other first-keys (form:, word:, ...) — entry ignored via empty replace.
             continue;
         }
-        if let Some(v) = trimmed.strip_prefix("trigger:") {
-            trigger = Some(unquote(v));
-        } else if let Some(v) = trimmed.strip_prefix("replace:") {
-            let v = v.trim();
-            if matches!(v, "|" | "|-" | "|+" | ">" | ">-") {
-                block_key_indent = Some(indent);
-                replace = Some(String::new());
-            } else if !v.is_empty() {
-                replace = Some(unquote(v));
-            }
-        }
-        // Any other key (form/vars/extensions) is ignored; a match without a literal
-        // `replace` is skipped at flush — imported snippets are inert text only.
+        store_match_key(
+            trimmed,
+            indent,
+            &mut trigger,
+            &mut replace,
+            &mut block_key_indent,
+        );
     }
     flush(&mut rows, &mut trigger, &mut replace);
     rows
@@ -1684,7 +1902,7 @@ pub fn spellcheck_ignore_word(
 /// Run `f` on the GTK main thread and block until it completes. Raw X11 calls share the X
 /// display connection with GTK (which does its own X access on the main thread), so they must
 /// be serialized there or they race / silently no-op.
-fn on_main<R: Send + 'static>(
+pub(crate) fn on_main<R: Send + 'static>(
     app: &tauri::AppHandle,
     f: impl FnOnce(&tauri::AppHandle) -> R + Send + 'static,
 ) -> Option<R> {
@@ -2140,5 +2358,106 @@ mod tests {
         assert_eq!(rows[0], (":date".into(), "{{mydate}}".into(), None));
         assert_eq!(rows[1], (":run".into(), "{{output}}".into(), None));
         assert!(!rows.iter().any(|(_, r, _)| r.contains("rm -rf")));
+    }
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    use crate::domain::models::{ContentType, Segment, TriggerBinding, TriggerType};
+
+    fn phrase(abbr: Option<&str>, body: Vec<Segment>, regex: bool) -> Phrase {
+        Phrase {
+            id: "p".into(),
+            folder_id: "f".into(),
+            name: "Phrase".into(),
+            abbreviation: abbr.map(String::from),
+            content_type: ContentType::Plain,
+            body,
+            triggers: vec![TriggerBinding {
+                kind: TriggerType::Autotext,
+                abbreviation: abbr.map(String::from),
+                key: None,
+                regex,
+                execute: Default::default(),
+            }],
+            sensitive: false,
+            app_scope: None,
+            expanded_count: 0,
+            last_used_at: None,
+            case_mode: Default::default(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            deleted_at: None,
+            tags: Vec::new(),
+        }
+    }
+
+    fn text(s: &str) -> Vec<Segment> {
+        vec![Segment::Text { text: s.into() }]
+    }
+
+    #[test]
+    fn export_rows_keep_text_only() {
+        let ps = vec![
+            phrase(Some("sig"), text("Best regards"), false),
+            // macro body → skipped
+            phrase(
+                Some("dt"),
+                vec![Segment::Macro {
+                    macro_value: crate::domain::models::Macro::Uuid,
+                }],
+                false,
+            ),
+            // regex trigger → skipped
+            phrase(Some(":[a-z]+"), text("x"), true),
+            // no abbreviation → skipped
+            phrase(None, text("y"), false),
+        ];
+        let (rows, skipped) = export_rows(&ps);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].trigger, "sig");
+        assert_eq!(rows[0].text, "Best regards");
+        assert_eq!(skipped, 3);
+    }
+
+    #[test]
+    fn textexpander_csv_round_trips_commas_and_newlines() {
+        let rows = vec![ExportRow {
+            trigger: ":addr".into(),
+            label: "Address".into(),
+            text: "Line1, with comma\nLine2".into(),
+        }];
+        let csv = textexpander_csv(&rows);
+        assert!(csv.starts_with("abbreviation,snippet,label"), "header: {csv}");
+        // The csv writer quotes fields containing commas/newlines — parse it back.
+        let parsed = parse_textexpander_csv(&csv);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].0, ":addr");
+        assert_eq!(parsed[0].1, "Line1, with comma\nLine2");
+    }
+
+    #[test]
+    fn plain_csv_round_trips() {
+        let rows = vec![ExportRow {
+            trigger: "a1".into(),
+            label: "n".into(),
+            text: "hello, world".into(),
+        }];
+        let csv = plain_csv(&rows);
+        assert_eq!(csv, "a1,\"hello, world\"\n");
+    }
+
+    #[test]
+    fn espanso_yaml_has_matches_shape() {
+        let rows = vec![ExportRow {
+            trigger: ":hello".into(),
+            label: "Greeting".into(),
+            text: "multi\nline".into(),
+        }];
+        let yaml = espanso_yaml(&rows);
+        assert!(yaml.starts_with("matches:"), "shape: {yaml}");
+        assert!(yaml.contains("trigger: ':hello'") || yaml.contains("trigger: \":hello\"") || yaml.contains("trigger: :hello"), "trigger: {yaml}");
+        assert!(yaml.contains("multi"), "multiline replace missing: {yaml}");
     }
 }

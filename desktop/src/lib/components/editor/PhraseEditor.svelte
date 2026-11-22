@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { AiAction, CaseMode, ContentType, ExecuteMode, Folder, Macro, Phrase, PhraseSummary, Segment } from "$lib/types";
   import { errToast } from "$lib/stores/toastError";
-  import { buildSavePayload } from "$lib/editor/phraseDraft";
+  import { bodyPreview, buildSavePayload } from "$lib/editor/phraseDraft";
   import TagInput from "$lib/components/TagInput.svelte";
   import { api, errMsg } from "$lib/invoke";
   import { fmtDateTime } from "$lib/dates";
@@ -257,8 +257,37 @@
     variationPicks = new Set();
   }
 
+  // 3.5 live preview: flat shape of the body as it's typed (text verbatim,
+  // macros as {label} placeholders) — mirrors what the expander will produce
+  // without resolving anything.
+  const preview = $derived(bodyPreview($state.snapshot(segments) as Segment[]));
+
+  // 3.5 abbreviation-conflict warning: saving an abbreviation another live phrase
+  // already owns makes BOTH fire (multi-match chooser on every use). Confirm so
+  // the overlap is a decision, not a surprise.
+  async function confirmAbbrevConflict(abbrev: string, selfId?: string): Promise<boolean> {
+    const trimmed = abbrev.trim();
+    if (!trimmed || isRegex) return true;
+    try {
+      const all = await api.listPhrases(undefined, undefined, false, "name");
+      const clash = all.find(
+        (p) =>
+          p.id !== selfId &&
+          (p.abbreviation ?? "").trim().toLowerCase() === trimmed.toLowerCase(),
+      );
+      if (!clash) return true;
+      return confirm(
+        `The abbreviation "${trimmed}" is already used by "${clash.name}".\n` +
+          `Both will trigger and a chooser pops up on every use.\n\nSave anyway?`,
+      );
+    } catch {
+      return true; // conflict check is advisory — never block saving on it
+    }
+  }
+
   async function save() {
     error = null;
+    if (!(await confirmAbbrevConflict(abbreviation, phrase?.id))) return;
     // Payload shape + validation live in $lib/editor/phraseDraft (pure, unit-tested).
     const body = $state.snapshot(segments) as Segment[];
     const built = buildSavePayload({
@@ -421,6 +450,13 @@
     <VariationsPanel bind:variations bind:variationPicks onapply={applyVariations} />
   </div>
 
+  {#if preview.trim()}
+    <div class="preview-box">
+      <span class="preview-label">live preview</span>
+      <span class="preview-text">{preview}</span>
+    </div>
+  {/if}
+
   {#if error}<div class="error">{error}</div>{/if}
 
   <div class="row" style="justify-content:flex-end">
@@ -430,6 +466,29 @@
 </div>
 
 <style>
+  .preview-box {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    background: var(--surface-2);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .preview-label {
+    font-size: var(--fs-xs);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+  .preview-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: var(--fs-base);
+    color: var(--text-dim);
+    max-height: 140px;
+    overflow-y: auto;
+  }
   .seg {
     display: inline-flex;
     border: 1px solid var(--border);
