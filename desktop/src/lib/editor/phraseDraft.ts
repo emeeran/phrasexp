@@ -84,3 +84,43 @@ export function buildSavePayload(
     },
   };
 }
+
+/** Human-readable label per macro type for the live preview (3.5). */
+const MACRO_LABELS: Record<string, string> = {
+  datetime: "date/time",
+  datemath: "date math",
+  inputform: "form field",
+  random: "random",
+  math: "math",
+  clipboard: "clipboard",
+  nested: "nested phrase",
+  env: "env var",
+  pick: "pick one",
+  file: "file",
+  ai: "AI prompt",
+  ai_action: "AI action",
+  aiaction: "AI action",
+  uuid: "UUID",
+  shell: "shell",
+  cite: "citation",
+  counter: "counter",
+  delay: "pause",
+  cursor: "cursor",
+  image: "image",
+};
+
+/** Flat live preview of a draft body (3.5): text verbatim, each macro as a
+ *  {label} placeholder, images as [image]. Runs as the user types — no
+ *  resolution, just shape. */
+export function bodyPreview(segments: Segment[]): string {
+  let out = "";
+  for (const s of segments) {
+    if (s.type === "text") {
+      out += s.text;
+    } else {
+      const label = MACRO_LABELS[s.macro.type] ?? s.macro.type;
+      out += `{${label}}`;
+    }
+  }
+  return out;
+}

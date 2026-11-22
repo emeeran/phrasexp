@@ -245,6 +245,10 @@ export interface Settings {
   ai_model?: string;
   /** Global brand voice — sent as a system message with every AI call. */
   ai_instructions?: string;
+  /** Sampling temperature (0–2, provider scale). */
+  ai_temperature?: number;
+  /** Output cap in tokens; 0 = provider default. */
+  ai_max_tokens?: number;
   /** Hotkey: capture the selection and offer AI actions on it. Empty = disabled. */
   ai_selection_hotkey?: string;
   /** Opt-in: after a sentence ends, offer an AI grammar pass via the offer popup.

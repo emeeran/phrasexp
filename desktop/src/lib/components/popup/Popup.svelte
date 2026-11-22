@@ -68,6 +68,30 @@
   let aiResult = $state("");
   let aiOriginal = $state("");
   let streaming = $state(false);
+  // Result-view quick chips: the action that produced the CURRENT result (the
+  // highlighted chip) and the action this airesult session started from (the
+  // "As-Is" chip re-runs it, restoring the original result). Null until the
+  // session's first run.
+  let aiOriginActionId = $state<string | null>(null);
+  let aiResultActionId = $state<string | null>(null);
+
+  // Quick re-run styles, Grammarly-style: one tap swaps the pending rewrite for
+  // the same selection through another builtin. Only rendered for builtins that
+  // actually exist in the action list.
+  const RESULT_CHIPS: { id: string; label: string }[] = [
+    { id: "ai-grammar", label: "Polish" },
+    { id: "ai-improve", label: "Clarity" },
+    { id: "ai-formal", label: "Formal" },
+    { id: "ai-casual", label: "Casual" },
+    { id: "ai-shorten", label: "Shorter" },
+  ];
+  const chipRow = $derived.by(() => {
+    if (!aiOriginActionId) return [];
+    const quick = RESULT_CHIPS.filter(
+      (c) => c.id !== aiOriginActionId && aiActions.some((a) => a.id === c.id),
+    ).map((c) => c);
+    return [{ id: aiOriginActionId, label: "As-Is" }, ...quick];
+  });
 
   // Adaptive sizing: report the shell's rendered size so the window hugs the
   // mode's content (scrollable regions cap it). Width mirrors the viewport and
@@ -157,8 +181,8 @@
   }
 
   async function onChoose(ids: string[]) {
-    const all = await api.listPhrases();
-    candidates = all.filter((p) => ids.includes(p.id));
+    // Batch fetch of just the candidates — no whole-library round trip.
+    candidates = await api.getPhrases(ids);
     chooseSelected = 0;
     mode = "choose";
     await tick();
@@ -233,6 +257,8 @@
   // arrives as the same event with `failed` set — the payload is the message.
   async function onAiSelection(preview: string, failed = false) {
     aiPreview = failed ? `⚠ ${preview}` : preview;
+    aiOriginActionId = null;
+    aiResultActionId = null;
     try {
       aiActions = await api.listAiActions();
     } catch (e) {
@@ -272,8 +298,11 @@
   }
 
   async function doRunAi(actionId: string, params?: Record<string, string>) {
+    aiResultActionId = actionId;
+    if (aiOriginActionId === null) aiOriginActionId = actionId;
     busy = true;
     error = null;
+    aiResult = ""; // deltas append — start from a clean accumulator
     try {
       await api.runAiAction(actionId, params);
     } catch (e) {
@@ -282,6 +311,32 @@
       mode = "search";
     } finally {
       busy = false;
+    }
+  }
+
+  // Chip re-run: a different builtin against the SAME captured selection, via the
+  // ai_decide "rerun" path (the pending slot holds the selection — run_ai_action's
+  // capture slot was consumed by the first run). Rust swaps the pending text via
+  // the usual ai-delta / ai-result stream, so the result view stays up. On failure
+  // the previous result stays visible; Retry and the chips remain usable (nothing
+  // has been pasted yet).
+  async function rerunAi(actionId: string) {
+    if (busy || streaming || actionId === aiResultActionId) return;
+    aiResultActionId = actionId;
+    busy = true;
+    error = null;
+    aiResult = ""; // deltas append — the old text must not survive into the stream
+    // Like retry: ai_decide streams via ai-delta but does NOT emit ai-result —
+    // the finished text is the command's return value, which swaps it in place
+    // and ends the stream. Without this, streaming stays stuck on "Generating…".
+    streaming = true;
+    try {
+      aiResult = await api.aiDecide("rerun", actionId);
+    } catch (e) {
+      error = errMsg(e);
+    } finally {
+      busy = false;
+      streaming = false;
     }
   }
 
@@ -304,6 +359,7 @@
     try {
       if (d === "retry") {
         streaming = true; // retry streams too — deltas swap the text in place
+        aiResult = ""; // deltas append — drop the old text first
         aiResult = await api.aiDecide("retry");
       } else if (d === "copy") {
         await api.aiDecide("copy", text);
@@ -462,16 +518,23 @@
     let unlistenAiResult: (() => void) | undefined;
     let unlistenAiDelta: (() => void) | undefined;
     let unlistenAiCancelled: (() => void) | undefined;
+    let unlistenLibChanged: (() => void) | undefined;
     void (async () => {
       await load();
       await reset();
       unlistenFocus = await win.onFocusChanged(({ payload: focused }) => {
         if (focused) {
-          void load();
+          // Cached list — a focus gain no longer pays a whole-library round trip.
+          // Fresh data arrives via the library-changed event below.
           void reset();
         } else {
           mode = "search"; // reset mode when hidden
         }
+      });
+      // The library mutated anywhere (main window, sync merge, import): refresh the
+      // cached list once, instead of on every popup summon.
+      unlistenLibChanged = await listen<void>("library-changed", () => {
+        void load();
       });
       unlistenChoose = await listen<string[]>("autotext-choose", (e) => {
         void onChoose(e.payload);
@@ -504,11 +567,11 @@
         mode = "airesult";
         void api.focusPopup();
       });
-      // Streaming deltas (accumulated text from Rust): show them as they arrive.
-      // The first delta swaps to the result view; decisions stay locked until the
-      // ai-result event flips `streaming` off.
+      // Streaming deltas (one chunk per event from Rust): append to the local
+      // accumulator — assigning accumulated text re-set the whole string per
+      // token, O(n²) render churn on long answers.
       unlistenAiDelta = await listen<string>("ai-delta", (e) => {
-        aiResult = e.payload;
+        aiResult += e.payload;
         streaming = true;
         if (mode !== "airesult") mode = "airesult";
       });
@@ -532,6 +595,7 @@
       unlistenAiResult?.();
       unlistenAiDelta?.();
       unlistenAiCancelled?.();
+      unlistenLibChanged?.();
     };
   });
 </script>
@@ -602,6 +666,9 @@
           original={aiOriginal}
           {busy}
           {streaming}
+          chips={chipRow}
+          activeChip={aiResultActionId}
+          onchip={rerunAi}
           ondecide={decideAi}
         />
       {:else}

@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod domain;
+mod hotkey;
 mod platform;
 mod sync;
 mod triggers;
@@ -93,14 +94,8 @@ impl AppState {
             .lock()
             .map(|g| !g.is_empty())
             .unwrap_or(false);
-        let scoped = self
-            .db
-            .list_phrases(None, None, false)
-            .map(|ps| {
-                ps.iter()
-                    .any(|p| p.app_scope.as_deref().is_some_and(|s| !s.is_empty()))
-            })
-            .unwrap_or(false);
+        // Single EXISTS query — no full-library decrypt just to check a boolean.
+        let scoped = self.db.has_scoped_phrase().unwrap_or(false);
         self.app_poll_needed.store(
             (self.spellcheck_enabled.load(Ordering::Relaxed) && excl) || scoped,
             Ordering::Relaxed,
@@ -113,11 +108,17 @@ impl AppState {
 /// fails silently by nature (no window to print into), so this is the lever for the
 /// "nothing happens at all" class of bug.
 pub(crate) fn debug_log(msg: &str) {
-    use std::sync::OnceLock;
-    static ON: OnceLock<bool> = OnceLock::new();
-    if *ON.get_or_init(|| std::env::var("PHRASEXP_DEBUG").as_deref() == Ok("1")) {
+    if debug_enabled() {
         eprintln!("[phrasexp] {msg}");
     }
+}
+
+/// Whether `PHRASEXP_DEBUG=1` — lets hot-path call sites (per keystroke) skip
+/// building debug strings that `debug_log` would only discard.
+pub(crate) fn debug_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PHRASEXP_DEBUG").as_deref() == Ok("1"))
 }
 
 /// Background poller keeping `current_app` fresh (app-scoping + spellcheck exclude).
@@ -301,17 +302,34 @@ fn show_popup(app: &tauri::AppHandle) {
     }
     summon_popup(app, &win);
     let _ = app.emit("popup-shown", ());
+    // Search mode has no frontend focusPopup call (the AI flow does), so focus-stealing
+    // prevention leaves the popup keyboard-less on GNOME: plain set_focus from a tray app
+    // is denied. Retry the direct X11 focus (XRaiseWindow + XSetInputFocus) with a bounded
+    // loop covering the map lag — the same pattern as grab_keyboard's retry.
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        for _ in 0..8 {
+            let _ = commands::on_main(&handle, |a| {
+                if let Some(win) = a.get_webview_window("popup") {
+                    let _ = win.set_focus();
+                    crate::triggers::autotext::force_focus_x11(&win);
+                }
+            });
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    });
 }
 
 /// Move the popup window next to the mouse cursor (8px offset, clamped off the
 /// screen origin). Shared by every cold popup summon (search, chooser, offer).
+/// Tauri's built-in cursor position — no device_query dependency.
 pub(crate) fn position_popup_at_cursor(win: &tauri::WebviewWindow) {
-    use device_query::{DeviceQuery, DeviceState};
-    let (mx, my) = DeviceState::new().get_mouse().coords;
-    let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
-        (mx + 8).max(0),
-        (my + 8).max(0),
-    )));
+    if let Ok(pos) = win.cursor_position() {
+        let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            pos.x as i32 + 8,
+            pos.y as i32 + 8,
+        )));
+    }
 }
 
 /// Bring the popup on screen with key focus. On macOS the app must be activated
@@ -341,16 +359,10 @@ fn inject_phrase_by_id(app: &tauri::AppHandle, id: &str) {
     if let Ok(phrase) = state.db.get_active_phrase(id) {
         // Global expansion exclusion applies to explicit hotkeys too — a disabled
         // window (password manager, terminal) stays disabled for all autotext output.
-        let excluded = state
-            .current_app
-            .lock()
-            .ok()
-            .and_then(|cur| {
-                let exset = state.autotext_exclude_apps.lock().ok()?;
-                crate::triggers::app_context::title_matches_any(&cur, &exset).then_some(true)
-            })
-            .unwrap_or(false);
-        if excluded {
+        if triggers::autotext::title_excluded(
+            &state.current_app,
+            &state.autotext_exclude_apps,
+        ) {
             return;
         }
         // Respect app scope.
@@ -465,24 +477,23 @@ pub fn reregister_hotkeys(app: &tauri::AppHandle) {
 
 /// Parse a hotkey string like "Control+Alt+Space" into a Shortcut.
 pub fn parse_hotkey(s: &str) -> Option<Shortcut> {
+    let (shift, ctrl, alt, meta, key) = crate::hotkey::split_chord(s)?;
     let mut mods = Modifiers::empty();
-    let mut code: Option<Code> = None;
-    for raw in s.split('+') {
-        let part = raw.trim().to_lowercase();
-        if part.is_empty() {
-            continue;
-        }
-        match part.as_str() {
-            "control" | "ctrl" => mods |= Modifiers::CONTROL,
-            "shift" => mods |= Modifiers::SHIFT,
-            "alt" | "option" | "opt" => mods |= Modifiers::ALT,
-            "meta" | "super" | "win" | "cmd" | "command" => mods |= Modifiers::META,
-            other => code = Some(name_to_code(other)?),
-        }
+    if ctrl {
+        mods |= Modifiers::CONTROL;
+    }
+    if shift {
+        mods |= Modifiers::SHIFT;
+    }
+    if alt {
+        mods |= Modifiers::ALT;
+    }
+    if meta {
+        mods |= Modifiers::META;
     }
     Some(Shortcut::new(
         if mods.is_empty() { None } else { Some(mods) },
-        code?,
+        name_to_code(&key)?,
     ))
 }
 
@@ -566,27 +577,20 @@ pub fn run() {
                 .with_handler(|app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
                         // Per-phrase hotkey? -> inject that phrase directly. Else -> popup.
-                        let phrase_id = app
+                        // Same routing as listener-detected tokens (dispatch_app_token).
+                        let token = app
                             .state::<AppState>()
                             .hotkey_registry
                             .lock()
-                            .map(|reg| {
+                            .ok()
+                            .and_then(|reg| {
                                 reg.iter()
                                     .find(|(sc, _)| sc == shortcut)
                                     .map(|(_, id)| id.clone())
-                            })
-                            .ok()
-                            .flatten();
-                        if let Some(id) = phrase_id {
-                            if id == SELECTION_AI_TOKEN {
-                                start_selection_ai(app);
-                            } else if id == REPEAT_OUTPUT_TOKEN {
-                                repeat_last_output(app);
-                            } else {
-                                inject_phrase_by_id(app, &id);
-                            }
-                        } else {
-                            show_popup(app);
+                            });
+                        match token {
+                            Some(id) => dispatch_app_token(app, &id),
+                            None => show_popup(app),
                         }
                     }
                 })
@@ -677,59 +681,46 @@ pub fn run() {
 
             let injector = triggers::make_injector();
 
-            // Abbreviation index + autotext listener.
-            let phrases = db.list_phrases(None, None, false)?;
-            let abbrev_index = Arc::new(Mutex::new(triggers::AbbrevIndex::from_phrases(&phrases)));
-            {
-                let guard = abbrev_index.lock();
-                crate::debug_log(&format!(
-                    "abbrev index: {} literal(s) from {} phrase(s)",
-                    guard.as_ref().map(|i| i.len()).unwrap_or(0),
-                    phrases.len()
-                ));
-            }
+            // Abbreviation index + autotext listener. The index starts EMPTY and is
+            // swapped in by the background init thread below — building it requires a
+            // full-library decrypt that used to block the entire main thread at boot.
+            // The tray/window show immediately; the listener runs from the start (an
+            // empty index just doesn't expand yet — a sub-second gap while loading).
+            let abbrev_index = Arc::new(Mutex::new(triggers::AbbrevIndex::from_phrases(&[])));
             let current_app = Arc::new(Mutex::new(None::<String>));
-            let excl_nonempty = !settings.spellcheck_exclude_apps.is_empty();
-            let scoped = phrases
-                .iter()
-                .any(|p| p.app_scope.as_deref().is_some_and(|s| !s.is_empty()));
-            let sc_on = settings.spellcheck_enabled;
-            crate::debug_log(&format!(
-                "app poller: spellcheck={sc_on} excl_nonempty={excl_nonempty} scoped={scoped}"
-            ));
-            let app_poll_needed = Arc::new(AtomicBool::new(
-                (settings.spellcheck_enabled && excl_nonempty) || scoped,
-            ));
+            // The poller-needed decision is computed via AppState::refresh_app_poll_needed
+            // right after `app.manage` below — one formula, one place.
+            let app_poll_needed = Arc::new(AtomicBool::new(false));
             start_app_poller(Arc::clone(&current_app), Arc::clone(&app_poll_needed));
             // App-level hotkey chords for the key listener; populated by
             // reregister_hotkeys once AppState is managed.
             let app_chords: Arc<Mutex<Vec<triggers::autotext::AppChord>>> =
                 Arc::new(Mutex::new(Vec::new()));
-            let autotext = triggers::autotext::start(
-                Arc::clone(&db),
-                Arc::clone(&injector),
-                Arc::clone(&abbrev_index),
-                Arc::clone(&autotext_enabled),
-                Arc::clone(&spellcheck_enabled),
-                Arc::clone(&case_adapt_enabled),
-                Arc::clone(&review_sentence),
-                Arc::clone(&typed_counter),
-                Arc::clone(&current_app),
-                Arc::clone(&spellcheck_ignore),
-                Arc::clone(&spellcheck_mode),
-                Arc::clone(&spellcheck_learned),
-                Arc::clone(&spellcheck_hotkey),
-                Arc::clone(&spellcheck_exclude_apps),
-                Arc::clone(&autotext_exclude_apps),
-                Arc::clone(&spellcheck_delivery),
-                Arc::clone(&autotext_injecting),
-                Arc::clone(&autotext_last_echo),
-                Arc::clone(&spellcheck_offer),
-                Arc::clone(&spellcheck_offer_candidates),
-                Arc::clone(&spellcheck_buffer_clear),
-                Arc::clone(&app_chords),
-                app.handle().clone(),
-            );
+            let autotext = triggers::autotext::start(triggers::autotext::ListenerShared {
+                db: Arc::clone(&db),
+                injector: Arc::clone(&injector),
+                index: Arc::clone(&abbrev_index),
+                enabled: Arc::clone(&autotext_enabled),
+                spellcheck: Arc::clone(&spellcheck_enabled),
+                case_adapt: Arc::clone(&case_adapt_enabled),
+                review_sentence: Arc::clone(&review_sentence),
+                typed_counter: Arc::clone(&typed_counter),
+                current: Arc::clone(&current_app),
+                ignore: Arc::clone(&spellcheck_ignore),
+                mode: Arc::clone(&spellcheck_mode),
+                learned: Arc::clone(&spellcheck_learned),
+                spellcheck_hotkey: Arc::clone(&spellcheck_hotkey),
+                exclude_apps: Arc::clone(&spellcheck_exclude_apps),
+                autotext_exclude: Arc::clone(&autotext_exclude_apps),
+                delivery: Arc::clone(&spellcheck_delivery),
+                injecting: Arc::clone(&autotext_injecting),
+                last_echo: Arc::clone(&autotext_last_echo),
+                offer: Arc::clone(&spellcheck_offer),
+                offer_candidates: Arc::clone(&spellcheck_offer_candidates),
+                buffer_clear: Arc::clone(&spellcheck_buffer_clear),
+                app_chords: Arc::clone(&app_chords),
+                app: app.handle().clone(),
+            });
 
             // Clipboard auto-capture poller.
             triggers::clipboard::start(
@@ -778,6 +769,28 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 reregister_hotkeys(app.handle());
+            }
+
+            // Background init: full-library index build + app-poll refresh. Off the
+            // main thread so the tray/window are never blocked on library decrypt.
+            {
+                let db_bg = app.state::<AppState>().db.clone();
+                let index_bg = Arc::clone(&app.state::<AppState>().abbrev_index);
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    match crate::triggers::rebuild_index(&db_bg, &index_bg) {
+                        Ok(()) => {
+                            if let Ok(guard) = index_bg.lock() {
+                                crate::debug_log(&format!(
+                                    "abbrev index: {} trigger(s)",
+                                    guard.len()
+                                ));
+                            }
+                        }
+                        Err(e) => eprintln!("[phrasexp] index build failed: {e}"),
+                    }
+                    handle.state::<AppState>().refresh_app_poll_needed();
+                });
             }
 
             // System tray (Show / Quit).
@@ -842,6 +855,7 @@ pub fn run() {
             commands::set_folder_enabled,
             commands::list_phrases,
             commands::get_phrase,
+            commands::get_phrases,
             commands::create_phrase,
             commands::update_phrase,
             commands::delete_phrase,
@@ -868,8 +882,12 @@ pub fn run() {
             commands::format_citation,
             commands::sync_now,
             commands::sync_set_dir,
+            commands::sync_set_passphrase,
             commands::sync_status,
             commands::export_library,
+            commands::export_espanso,
+            commands::export_textexpander_csv,
+            commands::export_csv,
             commands::import_csv,
             commands::import_ahk,
             commands::import_atext,

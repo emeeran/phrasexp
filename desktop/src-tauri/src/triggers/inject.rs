@@ -188,10 +188,10 @@ impl Injector for YdotoolInjector {
 
     fn backspace(&self, n: usize) -> DomainResult<()> {
         // Linux input code 14 = KEY_BACKSPACE; "14:1 14:0" = press + release.
-        for _ in 0..n {
-            ydotool_key("14:1 14:0")?;
+        if n == 0 {
+            return Ok(());
         }
-        Ok(())
+        ydotool_key("14:1 14:0 ".repeat(n).trim_end())
     }
 
     fn paste_html(&self, html: &str, alt_text: &str) -> DomainResult<()> {
@@ -214,25 +214,63 @@ impl Injector for YdotoolInjector {
 
     fn move_left(&self, n: usize) -> DomainResult<()> {
         // Left arrow = 105 (KEY_LEFT).
-        for _ in 0..n {
-            ydotool_key("105:1 105:0")?;
+        if n == 0 {
+            return Ok(());
         }
-        Ok(())
+        ydotool_key("105:1 105:0 ".repeat(n).trim_end())
     }
 
     fn move_right(&self, n: usize) -> DomainResult<()> {
         // Right arrow = 106 (KEY_RIGHT).
-        for _ in 0..n {
-            ydotool_key("106:1 106:0")?;
+        if n == 0 {
+            return Ok(());
         }
-        Ok(())
+        ydotool_key("106:1 106:0 ".repeat(n).trim_end())
     }
 }
 
-/// Build a fresh Enigo instance, mapping init errors to DomainError.
-fn enigo() -> Result<Enigo, DomainError> {
-    Enigo::new(&Settings::default())
-        .map_err(|e| DomainError::Validation(format!("enigo init: {e}")))
+/// A held handle to the shared Enigo — derefs to `&mut Enigo` at the call sites.
+pub(crate) struct EnigoHandle(std::sync::MutexGuard<'static, Option<Enigo>>);
+
+impl std::ops::Deref for EnigoHandle {
+    type Target = Enigo;
+    fn deref(&self) -> &Enigo {
+        self.0.as_ref().expect("enigo slot filled before return")
+    }
+}
+
+impl std::ops::DerefMut for EnigoHandle {
+    fn deref_mut(&mut self) -> &mut Enigo {
+        self.0.as_mut().expect("enigo slot filled before return")
+    }
+}
+
+/// Build/reuse the shared Enigo instance, mapping init errors to DomainError.
+/// Constructing an Enigo opens the X display (or platform equivalent) — doing
+/// that per keystroke injection churns a connection per expansion. One
+/// process-global instance, lock-guarded per operation (injection sites are
+/// short and never nest).
+pub(crate) fn enigo() -> Result<EnigoHandle, DomainError> {
+    static ENIGO: std::sync::OnceLock<std::sync::Mutex<Option<Enigo>>> =
+        std::sync::OnceLock::new();
+    let cell = ENIGO.get_or_init(|| std::sync::Mutex::new(None));
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_none() {
+        *guard = Some(
+            Enigo::new(&Settings::default())
+                .map_err(|e| DomainError::Validation(format!("enigo init: {e}")))?,
+        );
+    }
+    Ok(EnigoHandle(guard))
+}
+
+/// The echo-quiet condvar: the listener pings it after stamping `last_echo`, so
+/// `quiet_clear` sleeps instead of polling the clock.
+pub static ECHO_CV: std::sync::Condvar = std::sync::Condvar::new();
+
+/// Called by the key listener on every observed echo of an injected key.
+pub(crate) fn notify_echo() {
+    ECHO_CV.notify_all();
 }
 
 /// Decode a PNG into clipboard image data (`arboard::set_image`).
@@ -327,6 +365,10 @@ static LAST_DELIVERY: std::sync::Mutex<
     Option<(ContentType, Vec<crate::domain::models::OutChunk>)>,
 > = std::sync::Mutex::new(None);
 
+/// Retention cap for LAST_DELIVERY (bytes across text chunks + path strings):
+/// bigger deliveries aren't recorded (repeat-last-output stays a no-op for them).
+const LAST_DELIVERY_MAX: usize = 64 * 1024;
+
 /// Snapshot of the last successful delivery (cloned — repeating must not consume it).
 pub fn last_delivery() -> Option<(ContentType, Vec<crate::domain::models::OutChunk>)> {
     LAST_DELIVERY.lock().ok().and_then(|g| g.clone())
@@ -379,8 +421,20 @@ pub fn deliver_chunks(
         Ok(())
     })();
     if result.is_ok() {
+        // Bound the retained delivery: repeat-last-output exists for text snippets,
+        // not multi-MB documents — skipping huge expansions keeps the static from
+        // pinning arbitrary output forever.
+        let total: usize = chunks.iter().map(|c| match c {
+            OutChunk::Text(t) => t.len(),
+            OutChunk::Image(p) => p.len(),
+            _ => 0,
+        }).sum();
         if let Ok(mut g) = LAST_DELIVERY.lock() {
-            *g = Some((content_type, chunks.to_vec()));
+            if total <= LAST_DELIVERY_MAX {
+                *g = Some((content_type, chunks.to_vec()));
+            } else {
+                *g = None;
+            }
         }
     } else if let Err(e) = &result {
         // A failed delivery leaves the user's typed abbreviation erased with nothing

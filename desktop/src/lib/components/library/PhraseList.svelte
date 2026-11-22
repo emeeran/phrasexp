@@ -88,7 +88,6 @@
       <Icon name="search" size={13} />
       <input
         bind:value={phrasesStore.query}
-        oninput={() => void phrasesStore.load()}
         placeholder="Search phrases…"
         aria-label="Search phrases"
       />

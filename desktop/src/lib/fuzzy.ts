@@ -93,14 +93,15 @@ export function rankPhrases<T extends Rankable>(query: string, items: T[], limit
       // Exact prefix on the abbreviation is the classic "I typed the abbr" case — big bonus.
       const abbr = (item.abbreviation ?? "").toLowerCase();
       const termLower = term.toLowerCase();
+      const abbrFuzzy = abbr.length > 0 ? fuzzyScore(term, abbr, 14) : -1;
       const abbrScore =
         abbr.length > 0
           ? abbr === termLower
             ? 140
             : abbr.startsWith(termLower)
               ? 100
-              : fuzzyScore(term, abbr, 14) > 0
-                ? fuzzyScore(term, abbr, 14) + 30
+              : abbrFuzzy > 0
+                ? abbrFuzzy + 30
                 : -1
           : -1;
       const termBest = Math.max(nameScore, abbrScore);

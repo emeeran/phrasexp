@@ -43,6 +43,35 @@ struct SyncSnapshot {
     phrases: Vec<Phrase>,
 }
 
+/// Header fields of the on-disk snapshot, for the status view. A missing or
+/// corrupt snapshot reads as all-None ("never synced") rather than an error —
+/// only `sync_now` needs to distinguish corrupt (it must refuse to push).
+pub(crate) struct SnapshotHeader {
+    pub device: Option<String>,
+    pub exported_at: Option<String>,
+    pub phrase_count: Option<usize>,
+}
+
+/// Read the snapshot header from `dir` (best-effort).
+pub(crate) fn read_snapshot_header(dir: &std::path::Path) -> SnapshotHeader {
+    let missing = || SnapshotHeader {
+        device: None,
+        exported_at: None,
+        phrase_count: None,
+    };
+    let Ok(s) = std::fs::read_to_string(dir.join(SYNC_FILE)) else {
+        return missing();
+    };
+    match serde_json::from_str::<SyncSnapshot>(&s) {
+        Ok(s) => SnapshotHeader {
+            device: Some(s.device),
+            exported_at: Some(s.exported_at),
+            phrase_count: Some(s.phrases.len()),
+        },
+        Err(_) => missing(),
+    }
+}
+
 /// Merge remote against local, last-writer-wins per phrase on `updated_at`
 /// (ISO-8601 strings compare correctly as plain text). Returns the phrases that
 /// must be applied to the local DB, the merged phrase set that belongs in the
@@ -102,6 +131,111 @@ fn snapshot_timestamp() -> String {
 /// otherwise interleave read-modify-write of the snapshot file).
 static SYNC_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Content hash of the last snapshot we wrote (folders+phrases only; see the
+/// skip-write check in `sync_now`). None until this process pushes once — a fresh
+/// process always writes once so the file can't be stale vs an external edit.
+static LAST_PUSHED_HASH: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
+// -- Snapshot encryption (3.1) ----------------------------------------------- //
+// A passphrase-set snapshot is sealed with AES-256-GCM under a PBKDF2-HMAC-SHA256
+// key (600k iterations, fixed per-app salt — the passphrase itself is the secret).
+// File form: `PHRASEXP-ENC1:<base64(nonce ‖ ciphertext)>`. Legacy plaintext
+// snapshots still read fine; a device without the passphrase refuses an encrypted
+// snapshot rather than treating it as empty (which would overwrite the folder with
+// a local-only library).
+
+const SYNC_ENC_PREFIX: &str = "PHRASEXP-ENC1:";
+const SYNC_KDF_ITERS: u32 = 600_000;
+
+/// Derived key cache: PBKDF2 at 600k iterations costs ~half a second — doing that
+/// on every auto-sync is absurd. One entry keyed by a hash of the passphrase;
+/// cleared when the passphrase changes (hash collision across different
+/// passphrases is astronomically unlikely and self-corrects on next derive).
+static DERIVED_KEY: std::sync::Mutex<Option<(u64, [u8; 32])>> = std::sync::Mutex::new(None);
+
+fn derive_key(passphrase: &str) -> [u8; 32] {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::hash::DefaultHasher::new();
+    passphrase.hash(&mut h);
+    let pkey = h.finish();
+    if let Ok(g) = DERIVED_KEY.lock() {
+        if let Some((k, key)) = g.as_ref() {
+            if *k == pkey {
+                return *key;
+            }
+        }
+    }
+    let mut key = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(
+        passphrase.as_bytes(),
+        b"phrasexp-sync-v1",
+        SYNC_KDF_ITERS,
+        &mut key,
+    );
+    if let Ok(mut g) = DERIVED_KEY.lock() {
+        *g = Some((pkey, key));
+    }
+    key
+}
+
+fn encrypt_snapshot(json: &str, passphrase: &str) -> DomainResult<String> {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    let cipher = aes_gcm::Aes256Gcm::new_from_slice(&derive_key(passphrase))
+        .map_err(|e| DomainError::Validation(format!("sync cipher: {e}")))?;
+    let nonce_bytes: [u8; 12] = rand::random();
+    let sealed = cipher
+        .encrypt(
+            nonce_bytes.as_ref().into(),
+            Payload {
+                msg: json.as_bytes(),
+                aad: SYNC_ENC_PREFIX.as_bytes(),
+            },
+        )
+        .map_err(|_| DomainError::Validation("sync seal failed".into()))?;
+    use base64::Engine;
+    let mut blob = Vec::with_capacity(12 + sealed.len());
+    blob.extend_from_slice(&nonce_bytes);
+    blob.extend_from_slice(&sealed);
+    Ok(format!(
+        "{}{}",
+        SYNC_ENC_PREFIX,
+        base64::engine::general_purpose::STANDARD.encode(blob)
+    ))
+}
+
+fn decrypt_snapshot(content: &str, passphrase: &str) -> DomainResult<String> {
+    use base64::Engine;
+    let b64 = content
+        .strip_prefix(SYNC_ENC_PREFIX)
+        .ok_or_else(|| DomainError::Validation("sync snapshot not encrypted".into()))?;
+    let blob = base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .map_err(|_| DomainError::Validation("sync snapshot is not valid base64".into()))?;
+    if blob.len() < 13 {
+        return Err(DomainError::Validation("sync snapshot too short".into()));
+    }
+    let (nonce, sealed) = blob.split_at(12);
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    let cipher = aes_gcm::Aes256Gcm::new_from_slice(&derive_key(passphrase))
+        .map_err(|e| DomainError::Validation(format!("sync cipher: {e}")))?;
+    let plain = cipher
+        .decrypt(
+            nonce.into(),
+            Payload {
+                msg: sealed,
+                aad: SYNC_ENC_PREFIX.as_bytes(),
+            },
+        )
+        .map_err(|_| {
+            DomainError::Validation(
+                "sync snapshot decryption failed — wrong passphrase (must match on every device)"
+                    .into(),
+            )
+        })?;
+    String::from_utf8(plain)
+        .map_err(|_| DomainError::Validation("sync snapshot is not valid UTF-8".into()))
+}
+
 /// Pull + push once. Errors mean "sync didn't happen" — the file and DB are left
 /// untouched (snapshot writes are temp-file + rename).
 pub fn sync_now(db: &Db) -> DomainResult<SyncReport> {
@@ -121,13 +255,29 @@ pub fn sync_now(db: &Db) -> DomainResult<SyncReport> {
     // only states allowed through to merge — and merge result is pushed back over
     // the file. A corrupt or unreadable snapshot must NOT look empty: the push would
     // replace the other devices' library with ours. Refuse and leave the file alone.
+    let passphrase = settings.sync_passphrase.clone();
     let remote = match std::fs::read_to_string(&path) {
-        Ok(s) => match serde_json::from_str::<SyncSnapshot>(&s) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                return Err(DomainError::Validation(format!(
-                    "sync snapshot is corrupt — not syncing (fix or delete {SYNC_FILE}): {e}"
-                )));
+        Ok(s) => {
+            // Encrypted form → must decrypt first (and refuse without a passphrase —
+            // treating it as empty would overwrite the folder with a local-only push).
+            let json = if s.starts_with(SYNC_ENC_PREFIX) {
+                if passphrase.is_empty() {
+                    return Err(DomainError::Validation(
+                        "sync snapshot is encrypted — set the same sync passphrase in Settings → Data"
+                            .into(),
+                    ));
+                }
+                decrypt_snapshot(&s, &passphrase)?
+            } else {
+                s
+            };
+            match serde_json::from_str::<SyncSnapshot>(&json) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    return Err(DomainError::Validation(format!(
+                        "sync snapshot is corrupt — not syncing (fix or delete {SYNC_FILE}): {e}"
+                    )));
+                }
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -204,6 +354,30 @@ pub fn sync_now(db: &Db) -> DomainResult<SyncReport> {
     report.stored = snapshot.phrases.len();
     let json = serde_json::to_string_pretty(&snapshot)
         .map_err(|e| DomainError::Validation(format!("snapshot serialize: {e}")))?;
+    let json = if passphrase.is_empty() {
+        json
+    } else {
+        encrypt_snapshot(&json, &passphrase)?
+    };
+    // Skip the write when the merged content is byte-identical to what we last
+    // pushed (a no-op edit still arrives here after the full merge). Content hash
+    // only — `exported_at` changes per run and must not defeat the check.
+    let content_json = serde_json::to_string(&(&snapshot.folders, &snapshot.phrases))
+        .map_err(|e| DomainError::Validation(format!("snapshot serialize: {e}")))?;
+    let content_hash = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::hash::DefaultHasher::new();
+        // Sealing mode is part of the identity — toggling the passphrase must
+        // rewrite the file (plaintext ↔ sealed), not skip on a matching content hash.
+        passphrase.is_empty().hash(&mut h);
+        content_json.hash(&mut h);
+        h.finish()
+    };
+    if path.exists() && *LAST_PUSHED_HASH.lock().unwrap_or_else(|e| e.into_inner()) == Some(content_hash)
+    {
+        return Ok(report);
+    }
+    *LAST_PUSHED_HASH.lock().unwrap_or_else(|e| e.into_inner()) = Some(content_hash);
     let tmp = dir.join(format!("{SYNC_FILE}.tmp"));
     std::fs::write(&tmp, json).map_err(|e| DomainError::Validation(format!("sync write: {e}")))?;
     std::fs::rename(&tmp, &path)
@@ -408,5 +582,34 @@ fn untrusted_detection_survives_json_roundtrip() {
         // The Shell phrase must not exist locally in any form.
         assert!(db.get_phrase(&evil.id).unwrap().is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod enc_tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_encrypt_roundtrip() {
+        let json = r#"{"device":"d","phrases":[]}"#;
+        let sealed = encrypt_snapshot(json, "correct horse").unwrap();
+        assert!(sealed.starts_with(SYNC_ENC_PREFIX));
+        assert!(!sealed.contains("phrases"));
+        let plain = decrypt_snapshot(&sealed, "correct horse").unwrap();
+        assert_eq!(plain, json);
+    }
+
+    #[test]
+    fn wrong_passphrase_is_a_named_error() {
+        let sealed = encrypt_snapshot("{}", "right").unwrap();
+        let err = decrypt_snapshot(&sealed, "wrong").unwrap_err().to_string();
+        assert!(err.contains("wrong passphrase"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn randomized_nonce_differs_per_seal() {
+        let a = encrypt_snapshot("{}", "pw").unwrap();
+        let b = encrypt_snapshot("{}", "pw").unwrap();
+        assert_ne!(a, b, "each seal must use a fresh nonce");
     }
 }

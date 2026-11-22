@@ -11,6 +11,33 @@ use super::models::{Macro, Segment};
 const PREVIEW_LIMIT: usize = 60;
 
 /// Pure: identical (macro, inputs, now) -> identical output.
+/// Shell macro bounds: kill the child after this long, keep at most this much
+/// stdout (the tail beyond the cap is discarded — the child is NOT killed for
+/// exceeding it, output just stops being captured).
+const SHELL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const SHELL_OUTPUT_CAP: usize = 64 * 1024;
+
+/// Wait for `child` to exit, up to `timeout`. Returns `Some(status)` on exit,
+/// `None` on expiry (caller kills the child). Poll loop on the worker thread —
+/// a cross-platform `wait_timeout` without extra deps.
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    timeout: std::time::Duration,
+) -> Option<std::process::ExitStatus> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => {}
+            Err(_) => return None,
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 pub fn evaluate_macro(
     m: &Macro,
     inputs: &HashMap<String, String>,
@@ -77,18 +104,55 @@ pub fn evaluate_macro(
         )),
         Macro::Uuid => Ok(uuid::Uuid::new_v4().to_string()),
         Macro::Shell { command } => {
-            // ponytail: no timeout, stderr dropped — commands come from the user's own
-            // phrase library; add a timeout if imported libraries are ever untrusted.
+            // Bounded shell run: a hung command used to wedge the expansion worker
+            // forever (the child inherits no output consumer and waits on it), and an
+            // enormous stdout used to balloon memory. Timeout + capped capture — the
+            // child is killed on expiry and the error names the timeout.
             let (program, flag) = if cfg!(target_os = "windows") {
                 ("cmd", "/C")
             } else {
                 ("sh", "-c")
             };
-            let out = std::process::Command::new(program)
+            let mut child = std::process::Command::new(program)
                 .args([flag, command])
-                .output()
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
                 .map_err(|e| DomainError::Validation(format!("shell macro: {e}")))?;
-            Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+            let Some(status) = wait_with_timeout(&mut child, SHELL_TIMEOUT) else {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(DomainError::Validation(format!(
+                    "shell macro timed out after {}s: {}",
+                    SHELL_TIMEOUT.as_secs(),
+                    command
+                )));
+            };
+            if !status.success() {
+                return Err(DomainError::Validation(format!(
+                    "shell macro exited with {status}: {command}"
+                )));
+            }
+            // Cap the captured stdout; a truncated tail is safer than unbounded memory.
+            let mut buf = Vec::new();
+            if let Some(mut stdout) = child.stdout.take() {
+                use std::io::Read;
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match stdout.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let room = SHELL_OUTPUT_CAP.saturating_sub(buf.len());
+                            buf.extend_from_slice(&chunk[..n.min(room)]);
+                            if buf.len() >= SHELL_OUTPUT_CAP {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            let _ = child.wait();
+            Ok(String::from_utf8_lossy(&buf).trim_end().to_string())
         }
         // Counter needs DB state — resolved in Db::expand.
         Macro::Counter { .. } => Err(DomainError::Validation(
@@ -136,6 +200,17 @@ pub fn case_adapt(text: &str, abbr: &str) -> String {
     }
 }
 
+/// Char-aware truncation with a trailing ellipsis when cutting was needed.
+/// Trailing whitespace at the cut is trimmed so the ellipsis sits flush.
+pub fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(max).collect();
+        format!("{}…", cut.trim_end())
+    }
+}
+
 /// Literal text of a segment list, truncated at `PREVIEW_LIMIT` (list previews).
 pub(crate) fn preview_text(segments: &[Segment]) -> String {
     let mut text = String::new();
@@ -144,12 +219,7 @@ pub(crate) fn preview_text(segments: &[Segment]) -> String {
             text.push_str(t);
         }
     }
-    if text.chars().count() > PREVIEW_LIMIT {
-        let truncated: String = text.chars().take(PREVIEW_LIMIT).collect();
-        format!("{}…", truncated.trim_end())
-    } else {
-        text
-    }
+    truncate(&text, PREVIEW_LIMIT)
 }
 
 #[cfg(test)]
@@ -213,6 +283,30 @@ mod tests {
             evaluate_macro(&m, &HashMap::new(), fixed_now()).unwrap(),
             "hello"
         );
+    }
+
+    #[test]
+    fn macro_shell_times_out_on_hung_command() {
+        // Sleep far past the 5 s bound — the kill must surface as an error naming
+        // the timeout, not a wedge.
+        let m = Macro::Shell {
+            command: "sleep 30".into(),
+        };
+        let err = evaluate_macro(&m, &HashMap::new(), fixed_now())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("timed out"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn macro_shell_surfaces_nonzero_exit() {
+        let m = Macro::Shell {
+            command: "exit 3".into(),
+        };
+        let err = evaluate_macro(&m, &HashMap::new(), fixed_now())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("3"), "exit code missing: {err}");
     }
 
     #[test]

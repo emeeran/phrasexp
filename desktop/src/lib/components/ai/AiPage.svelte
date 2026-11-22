@@ -54,6 +54,9 @@
 
   async function save() {
     if (!draft) return;
+    // Number inputs yield ""/null when cleared — coerce to the valid range.
+    draft.ai_temperature = Math.min(2, Math.max(0, Number(draft.ai_temperature ?? 1)));
+    draft.ai_max_tokens = Math.max(0, Math.trunc(Number(draft.ai_max_tokens ?? 0)));
     await settingsStore.save(draft);
   }
 
@@ -161,6 +164,29 @@
           <span class="faint" style="font-size:var(--fs-xs)">
             Sent as a system message with every AI call, so all actions share one style.
           </span>
+        </div>
+        <div class="row" style="gap:10px">
+          <div class="field" style="flex:1">
+            <label for="ai-temp">Temperature <span class="faint">(0 = precise · 2 = creative)</span></label>
+            <input
+              id="ai-temp"
+              type="number"
+              min="0"
+              max="2"
+              step="0.1"
+              bind:value={draft.ai_temperature}
+            />
+          </div>
+          <div class="field" style="flex:1">
+            <label for="ai-max-tokens">Max tokens <span class="faint">(0 = provider default)</span></label>
+            <input
+              id="ai-max-tokens"
+              type="number"
+              min="0"
+              step="64"
+              bind:value={draft.ai_max_tokens}
+            />
+          </div>
         </div>
         <div class="field">
           <label for="ai-sel-hotkey">Selection rewrite hotkey</label>
